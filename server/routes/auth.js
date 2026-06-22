@@ -9,7 +9,7 @@ const router = express.Router();
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: '/auth/google/callback'
+  callbackURL: 'https://my-project-gq9n.onrender.com/auth/google/callback'
 },
 async (accessToken, refreshToken, profile, done) => {
   try {
@@ -85,15 +85,18 @@ router.get('/google', passport.authenticate('google', {
 }));
 
 router.get('/google/callback',
-  passport.authenticate('google', { failureRedirect: '/' }),
+  passport.authenticate('google', { failureRedirect: 'https://bullionalgosystem.com' }),
   (req, res) => {
-    res.redirect('http://localhost:3000/userdashboard.html');
+    // Go back to where they came from, or default to dashboard
+    const redirectTo = req.session.returnTo || 'https://bullionalgosystem.com/userdashboard.html';
+    delete req.session.returnTo;
+    res.redirect(redirectTo);
   }
 );
 
 router.get('/logout', (req, res) => {
   req.logout(() => {
-    res.redirect('http://localhost:3000/index.html');
+    res.redirect('https://bullionalgosystem.com');
   });
 });
 
