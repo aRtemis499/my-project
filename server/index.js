@@ -2,6 +2,7 @@ const express = require('express');
 const session = require('express-session');
 const passport = require('passport');
 const cors = require('cors');
+const paymentRoutes = require('./routes/payments');
 require('dotenv').config();
 
 const authRoutes = require('./routes/auth');
@@ -10,6 +11,8 @@ const dashboardRoutes = require('./routes/dashboard');
 const adminRoutes = require('./routes/admin');
 const newsletterRoutes = require('./routes/newsletter');
 const app = express();
+
+app.use('/payments', paymentRoutes);
 
 app.use(cors({
   origin: ['https://bullionalgosystem.com', 'http://localhost:3000'],
