@@ -1,7 +1,17 @@
+const express = require('express');
+const axios = require('axios');
+const supabase = require('../config/supabase');
+const router = express.Router();
+
+const PLANS = {
+    premium_monthly:     35,
+    premium_semi_annual: 200,
+    premium_yearly:      360
+};
+
 router.post('/subscribe', async (req, res) => {
     const { plan, guest_name, guest_email } = req.body;
     
-    // Use logged in user or guest details
     let userEmail, userName;
     
     if (req.isAuthenticated()) {
@@ -25,9 +35,8 @@ router.post('/subscribe', async (req, res) => {
             'https://api.flutterwave.com/v3/payments',
             {
                 tx_ref,
-                amount: 0,
+                amount: PLANS[plan],  // ← fixed, was 0
                 currency: 'USD',
-                payment_plan: PLANS[plan],
                 redirect_url: `${process.env.FRONTEND_URL}/payment-success.html`,
                 customer: {
                     email: userEmail,
@@ -41,13 +50,12 @@ router.post('/subscribe', async (req, res) => {
             { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
         );
 
-        // Save pending payment — link to user if logged in
         const userId = req.isAuthenticated() ? req.user.id : null;
         
         await supabase.from('payments').insert([{
             user_id: userId,
             plan,
-            amount: 0,
+            amount: PLANS[plan],
             status: 'pending',
             tx_ref,
             guest_email: userId ? null : userEmail,
@@ -61,3 +69,5 @@ router.post('/subscribe', async (req, res) => {
         res.status(500).json({ error: 'Could not initialize payment' });
     }
 });
+
+module.exports = router;

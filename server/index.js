@@ -2,7 +2,6 @@ const express = require('express');
 const session = require('express-session');
 const passport = require('passport');
 const cors = require('cors');
-const paymentRoutes = require('./routes/payments');
 require('dotenv').config();
 
 const authRoutes = require('./routes/auth');
@@ -10,9 +9,11 @@ const mt5Routes = require('./routes/mt5');
 const dashboardRoutes = require('./routes/dashboard');
 const adminRoutes = require('./routes/admin');
 const newsletterRoutes = require('./routes/newsletter');
+const paymentRoutes = require('./routes/payments');
+
 const app = express();
 
-app.use('/payments', paymentRoutes);
+app.set('trust proxy', 1);
 
 app.use(cors({
   origin: ['https://bullionalgosystem.com', 'http://localhost:3000'],
@@ -20,18 +21,15 @@ app.use(cors({
 }));
 
 app.use(express.json());
-const path = require('path');
-app.use(express.static('C:/Users/DARTONX/Downloads/TRADING BOT/frontendwork - Copy'));
 
-app.set('trust proxy', 1);
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     maxAge: 24 * 60 * 60 * 1000,
-    secure: process.env.NODE_ENV === 'production',  // ← add this
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'  // ← add this
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
   }
 }));
 
@@ -43,6 +41,7 @@ app.use('/mt5', mt5Routes);
 app.use('/dashboard', dashboardRoutes);
 app.use('/admin', adminRoutes);
 app.use('/newsletter', newsletterRoutes);
+app.use('/payments', paymentRoutes);  
 
 app.get('/api/ping', (req, res) => {
   res.json({ message: 'Server is running!' });
