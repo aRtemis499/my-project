@@ -181,3 +181,71 @@ router.get('/admins', async (req, res) => {
 
 
 module.exports = router;
+
+router.get('/live-summary', async (req, res) => {
+    try {
+        const { data: accounts } = await supabase
+            .from('mt5_accounts')
+            .select('metaapi_account_id')
+            .eq('status', 'connected');
+
+        if (!accounts || accounts.length === 0) {
+            return res.json({ totalBalance: 0, totalEquity: 0, totalProfit: 0, dailyData: [] });
+        }
+
+        const MetaApi = require('metaapi.cloud-sdk').default;
+        const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
+
+        let totalBalance = 0;
+        let totalEquity = 0;
+        let totalProfit = 0;
+        const allHistory = [];
+
+        await Promise.all(accounts.map(async (acc) => {
+            try {
+                const account = await metaApi.metatraderAccountApi.getAccount(acc.metaapi_account_id);
+                const connection = account.getRPCConnection();
+                await connection.connect();
+                await connection.waitSynchronized();
+
+                const info = await connection.getAccountInformation();
+                totalBalance += info.balance || 0;
+                totalEquity += info.equity || 0;
+                totalProfit += info.profit || 0;
+
+                const endTime = new Date();
+                const startTime = new Date();
+                startTime.setDate(startTime.getDate() - 30);
+                const orders = await connection.getHistoryOrdersByTimeRange(startTime, endTime);
+                allHistory.push(...(orders.history || []));
+            } catch (e) {
+                console.error('Error fetching account:', e.message);
+            }
+        }));
+
+        // Build daily balance snapshots by working backwards
+        const dailyPnl = {};
+        allHistory.forEach(order => {
+            if (!order.doneTime || order.profit === undefined) return;
+            const day = new Date(order.doneTime).toISOString().split('T')[0];
+            dailyPnl[day] = (dailyPnl[day] || 0) + order.profit;
+        });
+
+        // Generate last 30 days with running balance
+        const days = [];
+        let runningBalance = totalBalance;
+        for (let i = 0; i < 30; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const key = d.toISOString().split('T')[0];
+            days.unshift({ date: key, balance: runningBalance });
+            runningBalance -= (dailyPnl[key] || 0);
+        }
+
+        res.json({ totalBalance, totalEquity, totalProfit, dailyData: days });
+
+    } catch (err) {
+        console.error('Live summary error:', err.message);
+        res.status(500).json({ error: 'Could not fetch live summary' });
+    }
+});
