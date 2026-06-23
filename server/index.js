@@ -12,7 +12,7 @@ const newsletterRoutes = require('./routes/newsletter');
 const app = express();
 
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: ['https://bullionalgosystem.com', 'http://localhost:3000'],
   credentials: true
 }));
 
@@ -20,11 +20,16 @@ app.use(express.json());
 const path = require('path');
 app.use(express.static('C:/Users/DARTONX/Downloads/TRADING BOT/frontendwork - Copy'));
 
+app.set('trust proxy', 1);
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    maxAge: 24 * 60 * 60 * 1000,
+    secure: process.env.NODE_ENV === 'production',  // ← add this
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'  // ← add this
+  }
 }));
 
 app.use(passport.initialize());
