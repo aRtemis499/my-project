@@ -190,16 +190,17 @@ router.get('/live-summary', async (req, res) => {
             .eq('status', 'connected');
 
         if (!accounts || accounts.length === 0) {
-            return res.json({ totalBalance: 0, totalEquity: 0, totalProfit: 0, dailyData: [] });
+            return res.json({
+                totalBalance: 0, totalEquity: 0, totalProfit: 0,
+                floatingPnl: 0, totalTrades: 0, winRate: 0, dailyData: []
+            });
         }
 
         const MetaApi = require('metaapi.cloud-sdk').default;
         const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
-        let totalBalance = 0;
-        let totalEquity = 0;
-        let totalProfit = 0;
-        const allHistory = [];
+        let totalBalance = 0, totalEquity = 0, totalProfit = 0;
+        let allHistory = [], allPositions = [];
 
         await Promise.all(accounts.map(async (acc) => {
             try {
@@ -213,6 +214,9 @@ router.get('/live-summary', async (req, res) => {
                 totalEquity += info.equity || 0;
                 totalProfit += info.profit || 0;
 
+                const positions = await connection.getPositions();
+                allPositions.push(...(positions || []));
+
                 const endTime = new Date();
                 const startTime = new Date();
                 startTime.setDate(startTime.getDate() - 30);
@@ -223,7 +227,17 @@ router.get('/live-summary', async (req, res) => {
             }
         }));
 
-        // Build daily balance snapshots by working backwards
+        // Floating PnL = total equity - total balance
+        const floatingPnl = totalEquity - totalBalance;
+
+        // Total trades & win rate from history
+        const closedTrades = allHistory.filter(o => o.profit !== undefined);
+        const wonTrades = closedTrades.filter(o => o.profit > 0);
+        const winRate = closedTrades.length > 0
+            ? Math.round((wonTrades.length / closedTrades.length) * 100)
+            : 0;
+
+        // Build daily balance snapshots (last 30 days)
         const dailyPnl = {};
         allHistory.forEach(order => {
             if (!order.doneTime || order.profit === undefined) return;
@@ -231,7 +245,6 @@ router.get('/live-summary', async (req, res) => {
             dailyPnl[day] = (dailyPnl[day] || 0) + order.profit;
         });
 
-        // Generate last 30 days with running balance
         const days = [];
         let runningBalance = totalBalance;
         for (let i = 0; i < 30; i++) {
@@ -242,7 +255,15 @@ router.get('/live-summary', async (req, res) => {
             runningBalance -= (dailyPnl[key] || 0);
         }
 
-        res.json({ totalBalance, totalEquity, totalProfit, dailyData: days });
+        res.json({
+            totalBalance,
+            totalEquity,
+            totalProfit,
+            floatingPnl,
+            totalTrades: closedTrades.length,
+            winRate,
+            dailyData: days
+        });
 
     } catch (err) {
         console.error('Live summary error:', err.message);
