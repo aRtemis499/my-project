@@ -7,10 +7,7 @@ const {
   disableSlaveAccount,
 } = require('../utils/duplikium'); // adjust path if needed
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const supabase = require('../config/supabase');
 
 // ── Admin guard ──
 function requireAdmin(req, res, next) {
