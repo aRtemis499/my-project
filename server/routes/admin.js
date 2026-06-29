@@ -1,6 +1,6 @@
 const express   = require('express');
 const router    = express.Router();
-const { createClient } = require('@supabase/supabase-js');
+const supabase = require('../config/supabase');
 const {
   addSlaveAccount,
   enableSlaveAccount,

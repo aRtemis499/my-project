@@ -1,9 +1,3 @@
-// ═══════════════════════════════════════════════
-//  routes/payments.js
-//  Updated: Flutterwave recurring plan support
-//           + webhook handler for auto-renewals
-// ═══════════════════════════════════════════════
-
 const express  = require('express');
 const axios    = require('axios');
 const supabase = require('../config/supabase');

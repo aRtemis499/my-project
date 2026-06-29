@@ -1,12 +1,9 @@
 const cron      = require('node-cron');
 const nodemailer = require('nodemailer');
-const { createClient } = require('@supabase/supabase-js');
+const supabase = require('../config/supabase');
 const { disableSlaveAccount } = require('../utils/duplikium'); // adjust path
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const supabase = require('../config/supabase');
 
 // ── Email transporter ──
 // If you already have nodemailer set up elsewhere, import that instance instead
