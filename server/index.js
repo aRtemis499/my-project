@@ -13,6 +13,12 @@ const paymentRoutes = require('./routes/payments');
 
 const app = express();
 
+// Must be before express.json() middleware for the webhook route
+app.use('/payments/webhook', express.raw({ type: 'application/json' }));
+
+// Then your normal JSON middleware for everything else
+app.use(express.json());
+
 app.set('trust proxy', 1);
 
 app.use(cors({
@@ -46,6 +52,8 @@ app.use('/payments', paymentRoutes);
 app.get('/api/ping', (req, res) => {
   res.json({ message: 'Server is running!' });
 });
+
+require('./jobs/subscriptionChecker');
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
