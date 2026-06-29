@@ -3,8 +3,6 @@ const nodemailer = require('nodemailer');
 const supabase = require('../config/supabase');
 const { disableSlaveAccount } = require('../utils/duplikium'); // adjust path
 
-const supabase = require('../config/supabase');
-
 // ── Email transporter ──
 // If you already have nodemailer set up elsewhere, import that instance instead
 const transporter = nodemailer.createTransport({
