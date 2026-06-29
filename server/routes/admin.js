@@ -7,8 +7,6 @@ const {
   disableSlaveAccount,
 } = require('../utils/duplikium'); // adjust path if needed
 
-const supabase = require('../config/supabase');
-
 // ── Admin guard ──
 function requireAdmin(req, res, next) {
   if (req.isAuthenticated && req.isAuthenticated() && req.user?.role === 'admin') {
