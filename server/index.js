@@ -16,8 +16,7 @@ const app = express();
 // Must be before express.json() middleware for the webhook route
 app.use('/payments/webhook', express.raw({ type: 'application/json' }));
 
-// Then your normal JSON middleware for everything else
-app.use(express.json());
+
 
 app.set('trust proxy', 1);
 
