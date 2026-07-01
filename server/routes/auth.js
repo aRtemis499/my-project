@@ -87,10 +87,12 @@ router.get('/google', passport.authenticate('google', {
 router.get('/google/callback',
   passport.authenticate('google', { failureRedirect: 'https://bullionalgosystem.com' }),
   (req, res) => {
-    // Go back to where they came from, or default to dashboard
     const redirectTo = req.session.returnTo || 'https://bullionalgosystem.com/userdashboard.html';
     delete req.session.returnTo;
-    res.redirect(redirectTo);
+    req.session.save((err) => {
+      if (err) console.error('Session save error:', err);
+      res.redirect(redirectTo);
+    });
   }
 );
 
