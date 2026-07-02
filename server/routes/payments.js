@@ -5,18 +5,12 @@ const router   = express.Router();
 
 const { enableSlaveAccount } = require('../utils/duplikium');
 
-console.log('[Payments] ENV CHECK:', {
-  monthly:  process.env.FLW_MONTHLY_ID,
-  semi:     process.env.FLW_SEMI_ANNUALLY_ID,
-  yearly:   process.env.FLW_YEARLY_ID,
-  secret:   process.env.FLW_SECRET_KEY ? 'SET' : 'MISSING',
-});
 
 // ── Plan config ──
 const PLANS = {
-  premium_monthly:     { amount: 35,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY_ID },
-  premium_semi_annual: { amount: 200, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY_ID    },
-  premium_yearly:      { amount: 360, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY_ID  },
+  premium_monthly:     { amount: 35,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY },
+  premium_semi_annual: { amount: 200, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY},
+  premium_yearly:      { amount: 360, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY },
 };
 
 // ─────────────────────────────────────────────
