@@ -54,6 +54,7 @@ router.post('/connect', requireAuth, async (req, res) => {
         investor_password: investor_password.trim(),
         status:           'pending',
         duplikium_account_id: null, // will be set when admin marks connected
+        metaapi_account_id:   null, // will be set when admin marks connected
       })
       .select()
       .single();
@@ -84,7 +85,7 @@ router.get('/status', requireAuth, async (req, res) => {
   try {
     const { data: account } = await supabase
       .from('mt5_accounts')
-      .select('id, status, server, account_number, duplikium_account_id, created_at')
+      .select('id, status, server, account_number, duplikium_account_id, metaapi_account_id, created_at')
       .eq('user_id', req.user.id)
       .single();
 
@@ -113,11 +114,21 @@ router.get('/live-data', requireAuth, async (req, res) => {
       return res.json({ connected: false });
     }
 
+    // MetaApi account must have been provisioned already (done in
+    // PATCH /admin/mt5-accounts/:id when admin marks status 'connected').
+    // Do NOT fall back to the Supabase row id — that is not a valid
+    // MetaApi account id and will always fail lookups.
+    if (!account.metaapi_account_id) {
+      console.warn(`[MT5 Live Data] No metaapi_account_id for user ${req.user.id} — account not yet provisioned on MetaApi.`);
+      return res.json({
+        connected: false,
+        error: 'MetaApi account not yet provisioned. Please contact support.',
+      });
+    }
+
     // Connect via MetaApi
-    // NOTE: MetaApi uses the account's MetaApi account ID stored in your DB
-    // Adjust field names to match your actual Supabase schema
     const metaAccount = await metaApi.metatraderAccountApi.getAccount(
-      account.metaapi_account_id || account.id
+      account.metaapi_account_id
     );
 
     await metaAccount.waitConnected();

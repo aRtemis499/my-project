@@ -1,11 +1,14 @@
 const express   = require('express');
 const router    = express.Router();
 const supabase = require('../config/supabase');
+const MetaApi   = require('metaapi.cloud-sdk').default;
 const {
   addSlaveAccount,
   enableSlaveAccount,
   disableSlaveAccount,
 } = require('../utils/duplikium'); // adjust path if needed
+
+const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
 // ── Admin guard ──
 function requireAdmin(req, res, next) {
@@ -17,7 +20,7 @@ function requireAdmin(req, res, next) {
 
 // ─────────────────────────────────────────────
 //  PATCH /admin/mt5-accounts/:id
-//  Update account status + sync with Duplikium
+//  Update account status + sync with Duplikium + MetaApi
 // ─────────────────────────────────────────────
 router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
   try {
@@ -41,13 +44,14 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
     }
 
     let duplikiumAccountId = account.duplikium_account_id;
+    let metaapiAccountId   = account.metaapi_account_id;
 
-    // ── Handle Duplikium sync based on new status ──
+    // ── Handle Duplikium + MetaApi sync based on new status ──
 
     if (status === 'connected') {
 
+      // ── Duplikium registration/re-enable ──
       if (!duplikiumAccountId) {
-        // First time connecting — register as a new slave on Duplikium
         try {
           console.log(`[Admin] Registering account #${account.account_number} on Duplikium...`);
           const duplikiumAccount = await addSlaveAccount({
@@ -59,16 +63,45 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
           console.log(`[Admin] Duplikium slave created: ${duplikiumAccountId}`);
         } catch (dupErr) {
           console.error('[Admin] Duplikium addSlaveAccount failed:', dupErr.message);
-          // Don't block the admin — log the error and continue
-          // The admin can retry or add manually in Duplikium cockpit
+          return res.status(502).json({
+            error: 'Duplikium registration failed. Account not marked as connected.',
+            detail: dupErr.message,
+          });
         }
       } else {
-        // Already exists on Duplikium — just re-enable it
         try {
           await enableSlaveAccount(duplikiumAccountId);
           console.log(`[Admin] Duplikium slave re-enabled: ${duplikiumAccountId}`);
         } catch (dupErr) {
           console.error('[Admin] Duplikium enableSlaveAccount failed:', dupErr.message);
+          return res.status(502).json({
+            error: 'Duplikium re-enable failed. Account not marked as connected.',
+            detail: dupErr.message,
+          });
+        }
+      }
+
+      // ── MetaApi registration (only if not already provisioned) ──
+      if (!metaapiAccountId) {
+        try {
+          console.log(`[Admin] Registering account #${account.account_number} on MetaApi...`);
+          const metaAccount = await metaApi.metatraderAccountApi.createAccount({
+            name:        `user-${account.user_id}`,
+            type:        'cloud',
+            login:       account.account_number,
+            password:    account.investor_password,
+            server:      account.server,
+            platform:    'mt5',
+            reliability: 'high', // recommended for production environments
+          });
+          metaapiAccountId = metaAccount.id;
+          console.log(`[Admin] MetaApi account created: ${metaapiAccountId}`);
+        } catch (metaErr) {
+          console.error('[Admin] MetaApi account creation failed:', metaErr.message);
+          return res.status(502).json({
+            error: 'MetaApi registration failed. Account not marked as connected.',
+            detail: metaErr.message,
+          });
         }
       }
 
@@ -92,6 +125,7 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
       .update({
         status:               status,
         duplikium_account_id: duplikiumAccountId,
+        metaapi_account_id:   metaapiAccountId,
         updated_at:           new Date().toISOString(),
       })
       .eq('id', id);
@@ -103,7 +137,12 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
 
     console.log(`[Admin] Account ${id} status updated to '${status}'`);
 
-    res.json({ success: true, status, duplikium_account_id: duplikiumAccountId });
+    res.json({
+      success: true,
+      status,
+      duplikium_account_id: duplikiumAccountId,
+      metaapi_account_id:   metaapiAccountId,
+    });
 
   } catch (err) {
     console.error('[Admin] Status update error:', err);
