@@ -288,22 +288,101 @@ router.get('/stats', requireAdmin, async (req, res) => {
 
 // ─────────────────────────────────────────────
 //  GET /admin/live-summary
-//  Aggregated MT5 stats across all connected users
+//  Aggregated MT5 stats across all connected users — computed live from MetaApi
 // ─────────────────────────────────────────────
 router.get('/live-summary', requireAdmin, async (req, res) => {
   try {
-    const { data: summary } = await supabase
-      .from('admin_summary')
-      .select('*')
-      .single();
+    const { data: accounts, error } = await supabase
+      .from('mt5_accounts')
+      .select('metaapi_account_id')
+      .eq('status', 'connected')
+      .not('metaapi_account_id', 'is', null);
 
-    res.json(summary || {
-      totalBalance: 0,
-      totalProfit:  0,
-      floatingPnl:  0,
-      totalTrades:  0,
-      winRate:      0,
-      dailyData:    [],
+    if (error) throw error;
+
+    if (!accounts || !accounts.length) {
+      return res.json({
+        totalBalance: 0, totalProfit: 0, floatingPnl: 0,
+        totalTrades: 0, winRate: 0, dailyData: [],
+      });
+    }
+
+    let totalBalance = 0;
+    let totalEquity  = 0;
+    let totalProfit  = 0;
+    let totalTrades  = 0;
+    let totalWins    = 0;
+    let totalClosed  = 0;
+    const combinedProfitByDay = {}; // { 'YYYY-MM-DD': summedProfit }
+
+    // Pull live data for every connected account, in parallel.
+    // If one account fails (disconnected, credentials issue, etc.),
+    // skip it rather than failing the whole aggregation.
+    await Promise.all(accounts.map(async (acc) => {
+      try {
+        const metaAccount = await metaApi.metatraderAccountApi.getAccount(acc.metaapi_account_id);
+        await metaAccount.waitConnected();
+        const connection = metaAccount.getRPCConnection();
+        await connection.connect();
+        await connection.waitSynchronized();
+
+        const info    = await connection.getAccountInformation();
+        const history = await connection.getHistoryOrdersByTimeRange(
+          new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          new Date()
+        );
+
+        totalBalance += info.balance || 0;
+        totalEquity  += info.equity  || 0;
+
+        (history || []).forEach(order => {
+          if (order.profit === undefined) return;
+          totalTrades += 1;
+          totalProfit += order.profit;
+          totalClosed += 1;
+          if (order.profit > 0) totalWins += 1;
+
+          const day = new Date(order.doneTime || order.time).toISOString().slice(0, 10);
+          combinedProfitByDay[day] = (combinedProfitByDay[day] || 0) + order.profit;
+        });
+
+      } catch (accErr) {
+        console.error(`[Admin] Live summary — account ${acc.metaapi_account_id} failed:`, accErr.message);
+        // Skip this account, continue aggregating the rest
+      }
+    }));
+
+    const winRate = totalClosed > 0 ? Math.round((totalWins / totalClosed) * 100) : 0;
+    const floatingPnl = totalEquity - totalBalance;
+
+    // Build a 30-day cumulative balance curve by working backwards from
+    // the current combined total balance, subtracting each day's net
+    // profit as we go back in time (since we don't store historical
+    // daily balance snapshots).
+    const days = [];
+    const today = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+
+    let runningBalance = totalBalance;
+    const dailyDataReversed = [];
+    for (let i = days.length - 1; i >= 0; i--) {
+      const day = days[i];
+      dailyDataReversed.push({ date: day, balance: runningBalance });
+      runningBalance -= (combinedProfitByDay[day] || 0);
+    }
+    const dailyData = dailyDataReversed.reverse();
+
+    res.json({
+      totalBalance,
+      totalProfit,
+      floatingPnl,
+      totalTrades,
+      winRate,
+      dailyData,
     });
 
   } catch (err) {
