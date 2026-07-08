@@ -32,7 +32,6 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Invalid status value.' });
     }
 
-    // Fetch the current account record
     const { data: account, error: fetchError } = await supabase
       .from('mt5_accounts')
       .select('*')
@@ -46,11 +45,8 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
     let duplikiumAccountId = account.duplikium_account_id;
     let metaapiAccountId   = account.metaapi_account_id;
 
-    // ── Handle Duplikium + MetaApi sync based on new status ──
-
     if (status === 'connected') {
 
-      // ── Duplikium registration/re-enable ──
       if (!duplikiumAccountId) {
         try {
           console.log(`[Admin] Registering account #${account.account_number} on Duplikium...`);
@@ -81,7 +77,6 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
         }
       }
 
-      // ── MetaApi registration (only if not already provisioned) ──
       if (!metaapiAccountId) {
         try {
           console.log(`[Admin] Registering account #${account.account_number} on MetaApi...`);
@@ -93,7 +88,7 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
             server:      account.server,
             platform:    'mt5',
             magic:       0,
-            reliability: 'high', // recommended for production environments
+            reliability: 'high',
           });
           metaapiAccountId = metaAccount.id;
           console.log(`[Admin] MetaApi account created: ${metaapiAccountId}`);
@@ -109,7 +104,6 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
 
     } else if (status === 'rejected' || status === 'pending') {
 
-      // If account exists on Duplikium, disable it
       if (duplikiumAccountId) {
         try {
           await disableSlaveAccount(duplikiumAccountId);
@@ -121,7 +115,6 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
 
     }
 
-    // ── Update Supabase ──
     const { error: updateError } = await supabase
       .from('mt5_accounts')
       .update({
@@ -173,6 +166,104 @@ router.get('/mt5-accounts', requireAdmin, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+//  GET /admin/trial-requests
+//  All pending trial requests
+// ─────────────────────────────────────────────
+router.get('/trial-requests', requireAdmin, async (req, res) => {
+  try {
+    const { data: requests, error } = await supabase
+      .from('trial_requests')
+      .select('*, users(name, email)')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ requests: requests || [] });
+
+  } catch (err) {
+    console.error('[Admin] Get trial requests error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  PATCH /admin/trial-requests/:id
+//  Approve or reject a trial request
+// ─────────────────────────────────────────────
+router.patch('/trial-requests/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id }     = req.params;
+    const { status } = req.body;
+
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status value.' });
+    }
+
+    const { data: request, error: fetchError } = await supabase
+      .from('trial_requests')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !request) {
+      return res.status(404).json({ error: 'Trial request not found.' });
+    }
+
+    if (status === 'approved') {
+      let userId = request.user_id;
+
+      if (!userId && request.guest_email) {
+        const { data: user } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', request.guest_email)
+          .single();
+        userId = user?.id || null;
+      }
+
+      const now       = new Date();
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { error: subError } = await supabase
+        .from('subscriptions')
+        .upsert({
+          user_id:     userId,
+          guest_name:  userId ? null : request.guest_name,
+          guest_email: userId ? null : request.guest_email,
+          plan:        'trial',
+          status:      'active',
+          expires_at:  expiresAt,
+          updated_at:  now.toISOString(),
+        }, { onConflict: userId ? 'user_id' : 'guest_email' });
+
+      if (subError) {
+        console.error('[Admin] Trial subscription upsert error:', subError);
+        return res.status(500).json({ error: 'Failed to activate trial subscription.' });
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from('trial_requests')
+      .update({
+        status:      status,
+        approved_at: status === 'approved' ? new Date().toISOString() : null,
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      console.error('[Admin] Trial request update error:', updateError);
+      return res.status(500).json({ error: 'Failed to update trial request.' });
+    }
+
+    console.log(`[Admin] Trial request ${id} ${status}`);
+    res.json({ success: true, status });
+
+  } catch (err) {
+    console.error('[Admin] Trial approval error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ─────────────────────────────────────────────
 //  GET /admin/stats
 //  Total users + active subscriptions
 // ─────────────────────────────────────────────
@@ -201,8 +292,6 @@ router.get('/stats', requireAdmin, async (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/live-summary', requireAdmin, async (req, res) => {
   try {
-    // Pull aggregated data you've stored, or compute from mt5_accounts
-    // This assumes you have a cached summary — adjust to your actual schema
     const { data: summary } = await supabase
       .from('admin_summary')
       .select('*')
