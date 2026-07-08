@@ -170,6 +170,96 @@ router.get('/mt5-accounts', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/trial-requests', requireAdmin, async (req, res) => {
+  try {
+    const { data: requests, error } = await supabase
+      .from('trial_requests')
+      .select('*, users(name, email)')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ requests: requests || [] });
+
+  } catch (err) {
+    console.error('[Admin] Get trial requests error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+router.patch('/trial-requests/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id }     = req.params;
+    const { status } = req.body; // 'approved' | 'rejected'
+
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status value.' });
+    }
+
+    const { data: request, error: fetchError } = await supabase
+      .from('trial_requests')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !request) {
+      return res.status(404).json({ error: 'Trial request not found.' });
+    }
+
+    if (status === 'approved') {
+      let userId = request.user_id;
+
+      if (!userId && request.guest_email) {
+        const { data: user } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', request.guest_email)
+          .single();
+        userId = user?.id || null;
+      }
+
+      const now       = new Date();
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { error: subError } = await supabase
+        .from('subscriptions')
+        .upsert({
+          user_id:     userId,
+          guest_name:  userId ? null : request.guest_name,
+          guest_email: userId ? null : request.guest_email,
+          plan:        'trial',
+          status:      'active',
+          expires_at:  expiresAt,
+          updated_at:  now.toISOString(),
+        }, { onConflict: userId ? 'user_id' : 'guest_email' });
+
+      if (subError) {
+        console.error('[Admin] Trial subscription upsert error:', subError);
+        return res.status(500).json({ error: 'Failed to activate trial subscription.' });
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from('trial_requests')
+      .update({
+        status:      status,
+        approved_at: status === 'approved' ? new Date().toISOString() : null,
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      console.error('[Admin] Trial request update error:', updateError);
+      return res.status(500).json({ error: 'Failed to update trial request.' });
+    }
+
+    console.log(`[Admin] Trial request ${id} ${status}`);
+    res.json({ success: true, status });
+
+  } catch (err) {
+    console.error('[Admin] Trial approval error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
 // ─────────────────────────────────────────────
 //  GET /admin/stats
 //  Total users + active subscriptions

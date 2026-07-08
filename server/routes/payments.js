@@ -13,12 +13,66 @@ const PLANS = {
   premium_yearly:      { amount: 360, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY },
 };
 
-// ─────────────────────────────────────────────
-//  POST /payments/subscribe
-//  Initializes a Flutterwave recurring payment
-// ─────────────────────────────────────────────
+
 router.post('/subscribe', async (req, res) => {
   const { plan, guest_name, guest_email } = req.body;
+  // ─────────────────────────────────────────────
+//  POST /payments/request-trial
+//  Free 7-day trial — no payment, requires admin approval
+// ─────────────────────────────────────────────
+router.post('/request-trial', async (req, res) => {
+  const { guest_name, guest_email } = req.body;
+
+  let userId, userEmail, userName;
+
+  if (req.isAuthenticated()) {
+    userId    = req.user.id;
+    userEmail = req.user.email;
+    userName  = req.user.name;
+  } else if (guest_email && guest_name) {
+    userId    = null;
+    userEmail = guest_email;
+    userName  = guest_name;
+  } else {
+    return res.status(401).json({ error: 'Please provide your details to continue.' });
+  }
+
+  try {
+    // Prevent duplicate trial requests for the same user/email
+    const { data: existing } = await supabase
+      .from('trial_requests')
+      .select('id, status')
+      .eq(userId ? 'user_id' : 'guest_email', userId || userEmail)
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(400).json({
+        error: 'A trial request already exists for this account. Contact support for changes.'
+      });
+    }
+
+    const { error: insertError } = await supabase
+      .from('trial_requests')
+      .insert([{
+        user_id:     userId,
+        guest_name:  userId ? null : userName,
+        guest_email: userId ? null : userEmail,
+        status:      'pending',
+      }]);
+
+    if (insertError) {
+      console.error('[Trial] Insert error:', insertError);
+      return res.status(500).json({ error: 'Could not submit trial request.' });
+    }
+
+    console.log(`[Trial] Request submitted by ${userEmail}`);
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error('[Trial] Request error:', err.message);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
 
   // ── Resolve user identity ──
   let userEmail, userName, userId;
