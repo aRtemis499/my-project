@@ -92,6 +92,7 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
             password:    account.investor_password,
             server:      account.server,
             platform:    'mt5',
+            magic:       0,
             reliability: 'high', // recommended for production environments
           });
           metaapiAccountId = metaAccount.id;
