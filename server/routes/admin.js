@@ -326,25 +326,28 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
         await connection.connect();
         await connection.waitSynchronized();
 
-        const info        = await connection.getAccountInformation();
-        const historyResp = await connection.getHistoryOrdersByTimeRange(
+        const info      = await connection.getAccountInformation();
+        const dealsResp = await connection.getDealsByTimeRange(
           new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
           new Date()
         );
-        const history = historyResp?.historyOrders || [];
+        // Only count actual closes (DEAL_ENTRY_OUT), not entries/opens —
+        // an open+close pair on the same position would otherwise be
+        // double-counted as two trades.
+        const history = (dealsResp?.deals || []).filter(d => d.entryType === 'DEAL_ENTRY_OUT');
 
         totalBalance += info.balance || 0;
         totalEquity  += info.equity  || 0;
 
-        (history || []).forEach(order => {
-          if (order.profit === undefined) return;
+        history.forEach(deal => {
+          if (deal.profit === undefined) return;
           totalTrades += 1;
-          totalProfit += order.profit;
+          totalProfit += deal.profit;
           totalClosed += 1;
-          if (order.profit > 0) totalWins += 1;
+          if (deal.profit > 0) totalWins += 1;
 
-          const day = new Date(order.doneTime || order.time).toISOString().slice(0, 10);
-          combinedProfitByDay[day] = (combinedProfitByDay[day] || 0) + order.profit;
+          const day = new Date(deal.time).toISOString().slice(0, 10);
+          combinedProfitByDay[day] = (combinedProfitByDay[day] || 0) + deal.profit;
         });
 
       } catch (accErr) {

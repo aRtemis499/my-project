@@ -138,11 +138,38 @@ router.get('/live-data', requireAuth, async (req, res) => {
 
     const info      = await connection.getAccountInformation();
     const positions = await connection.getPositions();
-    const historyResp = await connection.getHistoryOrdersByTimeRange(
+    const dealsResp = await connection.getDealsByTimeRange(
       new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 days
       new Date()
     );
-    const history = historyResp?.historyOrders || [];
+    const deals = dealsResp?.deals || [];
+
+    // MT5 profit lives on DEALS, not orders — and a single deal only has
+    // one price/time (either the open or the close), not both. To match
+    // the frontend's expected trade shape (openPrice, closePrice, type,
+    // volume, profit, doneTime), pair each closing deal with its opening
+    // deal via positionId and reconstruct one object per closed trade.
+    const openingDealsByPosition = {};
+    deals.forEach(d => {
+      if (d.entryType === 'DEAL_ENTRY_IN' && d.positionId) {
+        openingDealsByPosition[d.positionId] = d;
+      }
+    });
+
+    const history = deals
+      .filter(d => d.entryType === 'DEAL_ENTRY_OUT' && d.profit !== undefined)
+      .map(closeDeal => {
+        const openDeal = openingDealsByPosition[closeDeal.positionId];
+        return {
+          doneTime:   closeDeal.time,
+          openPrice:  openDeal ? openDeal.price : null,
+          closePrice: closeDeal.price,
+          type:       openDeal ? openDeal.type : closeDeal.type,
+          volume:     closeDeal.volume,
+          profit:     closeDeal.profit,
+        };
+      })
+      .sort((a, b) => new Date(b.doneTime) - new Date(a.doneTime));
 
     res.json({
       connected: true,
