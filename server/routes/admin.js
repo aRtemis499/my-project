@@ -326,11 +326,12 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
         await connection.connect();
         await connection.waitSynchronized();
 
-        const info    = await connection.getAccountInformation();
-        const history = await connection.getHistoryOrdersByTimeRange(
+        const info        = await connection.getAccountInformation();
+        const historyResp = await connection.getHistoryOrdersByTimeRange(
           new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
           new Date()
         );
+        const history = historyResp?.historyOrders || [];
 
         totalBalance += info.balance || 0;
         totalEquity  += info.equity  || 0;

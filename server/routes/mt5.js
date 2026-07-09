@@ -138,10 +138,11 @@ router.get('/live-data', requireAuth, async (req, res) => {
 
     const info      = await connection.getAccountInformation();
     const positions = await connection.getPositions();
-    const history   = await connection.getHistoryOrdersByTimeRange(
+    const historyResp = await connection.getHistoryOrdersByTimeRange(
       new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 days
       new Date()
     );
+    const history = historyResp?.historyOrders || [];
 
     res.json({
       connected: true,
@@ -149,7 +150,7 @@ router.get('/live-data', requireAuth, async (req, res) => {
       equity:    info.equity,
       profit:    info.profit,
       positions: positions || [],
-      history:   history   || [],
+      history:   history,
     });
 
   } catch (err) {
