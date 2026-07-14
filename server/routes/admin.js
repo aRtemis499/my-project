@@ -2,11 +2,7 @@ const express   = require('express');
 const router    = express.Router();
 const supabase = require('../config/supabase');
 const MetaApi   = require('metaapi.cloud-sdk').default;
-const {
-  addSlaveAccount,
-  enableSlaveAccount,
-  disableSlaveAccount,
-} = require('../utils/duplikium'); // adjust path if needed
+const { decrypt } = require('../utils/crypto');
 
 const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
@@ -20,7 +16,10 @@ function requireAdmin(req, res, next) {
 
 // ─────────────────────────────────────────────
 //  PATCH /admin/mt5-accounts/:id
-//  Update account status + sync with Duplikium + MetaApi
+//  Update account status. Duplikium removed — EA is attached manually
+//  by the admin outside the app once an account shows 'connected'.
+//  MetaApi provisioning still happens here since the dashboard's live
+//  balance/equity/trade-history view depends on it.
 // ─────────────────────────────────────────────
 router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
   try {
@@ -42,86 +41,39 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Account not found.' });
     }
 
-    let duplikiumAccountId = account.duplikium_account_id;
-    let metaapiAccountId   = account.metaapi_account_id;
+    let metaapiAccountId = account.metaapi_account_id;
 
-    if (status === 'connected') {
-
-      if (!duplikiumAccountId) {
-        try {
-          console.log(`[Admin] Registering account #${account.account_number} on Duplikium...`);
-          const duplikiumAccount = await addSlaveAccount({
-            account_number:    account.account_number,
-            investor_password: account.investor_password,
-            server:            account.server,
-          });
-          duplikiumAccountId = duplikiumAccount.account_id;
-          console.log(`[Admin] Duplikium slave created: ${duplikiumAccountId}`);
-        } catch (dupErr) {
-          console.error('[Admin] Duplikium addSlaveAccount failed:', dupErr.message);
-          return res.status(502).json({
-            error: 'Duplikium registration failed. Account not marked as connected.',
-            detail: dupErr.message,
-          });
-        }
-      } else {
-        try {
-          await enableSlaveAccount(duplikiumAccountId);
-          console.log(`[Admin] Duplikium slave re-enabled: ${duplikiumAccountId}`);
-        } catch (dupErr) {
-          console.error('[Admin] Duplikium enableSlaveAccount failed:', dupErr.message);
-          return res.status(502).json({
-            error: 'Duplikium re-enable failed. Account not marked as connected.',
-            detail: dupErr.message,
-          });
-        }
+    if (status === 'connected' && !metaapiAccountId) {
+      try {
+        console.log(`[Admin] Registering account #${account.account_number} on MetaApi...`);
+        const metaAccount = await metaApi.metatraderAccountApi.createAccount({
+          name:        `user-${account.user_id}`,
+          type:        'cloud',
+          login:       account.account_number,
+          password:    decrypt(account.trading_password),
+          server:      account.server,
+          platform:    'mt5',
+          magic:       0,
+          reliability: 'high',
+        });
+        metaapiAccountId = metaAccount.id;
+        console.log(`[Admin] MetaApi account created: ${metaapiAccountId}`);
+      } catch (metaErr) {
+        console.error('[Admin] MetaApi account creation failed:', metaErr.message);
+        console.error('[Admin] MetaApi error details:', JSON.stringify(metaErr.details || metaErr.response?.data || metaErr, null, 2));
+        return res.status(502).json({
+          error: 'MetaApi registration failed. Account not marked as connected.',
+          detail: metaErr.message,
+        });
       }
-
-      if (!metaapiAccountId) {
-        try {
-          console.log(`[Admin] Registering account #${account.account_number} on MetaApi...`);
-          const metaAccount = await metaApi.metatraderAccountApi.createAccount({
-            name:        `user-${account.user_id}`,
-            type:        'cloud',
-            login:       account.account_number,
-            password:    account.investor_password,
-            server:      account.server,
-            platform:    'mt5',
-            magic:       0,
-            reliability: 'high',
-          });
-          metaapiAccountId = metaAccount.id;
-          console.log(`[Admin] MetaApi account created: ${metaapiAccountId}`);
-        } catch (metaErr) {
-          console.error('[Admin] MetaApi account creation failed:', metaErr.message);
-          console.error('[Admin] MetaApi error details:', JSON.stringify(metaErr.details || metaErr.response?.data || metaErr, null, 2));
-          return res.status(502).json({
-            error: 'MetaApi registration failed. Account not marked as connected.',
-            detail: metaErr.message,
-          });
-        }
-      }
-
-    } else if (status === 'rejected' || status === 'pending') {
-
-      if (duplikiumAccountId) {
-        try {
-          await disableSlaveAccount(duplikiumAccountId);
-          console.log(`[Admin] Duplikium slave disabled: ${duplikiumAccountId}`);
-        } catch (dupErr) {
-          console.error('[Admin] Duplikium disableSlaveAccount failed:', dupErr.message);
-        }
-      }
-
     }
 
     const { error: updateError } = await supabase
       .from('mt5_accounts')
       .update({
-        status:               status,
-        duplikium_account_id: duplikiumAccountId,
-        metaapi_account_id:   metaapiAccountId,
-        updated_at:           new Date().toISOString(),
+        status:             status,
+        metaapi_account_id: metaapiAccountId,
+        updated_at:         new Date().toISOString(),
       })
       .eq('id', id);
 
@@ -135,8 +87,7 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
     res.json({
       success: true,
       status,
-      duplikium_account_id: duplikiumAccountId,
-      metaapi_account_id:   metaapiAccountId,
+      metaapi_account_id: metaapiAccountId,
     });
 
   } catch (err) {
@@ -147,13 +98,17 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
 
 // ─────────────────────────────────────────────
 //  GET /admin/mt5-accounts
-//  All submitted MT5 accounts
+//  All submitted MT5 accounts.
+//  IMPORTANT: trading_password is explicitly excluded from this
+//  response — the admin dashboard has no reason to display it in the
+//  browser, and sending it over the wire (encrypted or not) is an
+//  unnecessary exposure now that this is a real trading password.
 // ─────────────────────────────────────────────
 router.get('/mt5-accounts', requireAdmin, async (req, res) => {
   try {
     const { data: accounts, error } = await supabase
       .from('mt5_accounts')
-      .select('*, users(name, email)')
+      .select('id, user_id, server, account_number, status, metaapi_account_id, created_at, updated_at, users(name, email)')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -161,6 +116,52 @@ router.get('/mt5-accounts', requireAdmin, async (req, res) => {
 
   } catch (err) {
     console.error('[Admin] Get accounts error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  GET /admin/mt5-accounts/:id/credentials
+//  Separate, explicit endpoint for the admin to retrieve the trading
+//  password when they actually need it to attach the EA manually.
+//  Kept isolated from the main list endpoint so the password is only
+//  ever fetched on a deliberate action, not loaded automatically with
+//  every dashboard refresh. Decrypted here, at the point of actual use —
+//  it is never stored or transmitted in plaintext anywhere else.
+// ─────────────────────────────────────────────
+router.get('/mt5-accounts/:id/credentials', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: account, error } = await supabase
+      .from('mt5_accounts')
+      .select('server, account_number, trading_password')
+      .eq('id', id)
+      .single();
+
+    if (error || !account) {
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    let plainPassword;
+    try {
+      plainPassword = decrypt(account.trading_password);
+    } catch (decryptErr) {
+      console.error(`[Admin] Failed to decrypt trading_password for account ${id}:`, decryptErr.message);
+      return res.status(500).json({
+        error: 'Could not decrypt stored password. It may predate the backfill migration — check with the team.',
+      });
+    }
+
+    res.json({
+      account: {
+        server:           account.server,
+        account_number:   account.account_number,
+        trading_password: plainPassword,
+      },
+    });
+
+  } catch (err) {
+    console.error('[Admin] Get credentials error:', err);
     res.status(500).json({ error: 'Server error.' });
   }
 });
@@ -313,11 +314,8 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
     let totalTrades  = 0;
     let totalWins    = 0;
     let totalClosed  = 0;
-    const combinedProfitByDay = {}; // { 'YYYY-MM-DD': summedProfit }
+    const combinedProfitByDay = {};
 
-    // Pull live data for every connected account, in parallel.
-    // If one account fails (disconnected, credentials issue, etc.),
-    // skip it rather than failing the whole aggregation.
     await Promise.all(accounts.map(async (acc) => {
       try {
         const metaAccount = await metaApi.metatraderAccountApi.getAccount(acc.metaapi_account_id);
@@ -331,9 +329,6 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
           new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
           new Date()
         );
-        // Only count actual closes (DEAL_ENTRY_OUT), not entries/opens —
-        // an open+close pair on the same position would otherwise be
-        // double-counted as two trades.
         const history = (dealsResp?.deals || []).filter(d => d.entryType === 'DEAL_ENTRY_OUT');
 
         totalBalance += info.balance || 0;
@@ -352,17 +347,12 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
 
       } catch (accErr) {
         console.error(`[Admin] Live summary — account ${acc.metaapi_account_id} failed:`, accErr.message);
-        // Skip this account, continue aggregating the rest
       }
     }));
 
     const winRate = totalClosed > 0 ? Math.round((totalWins / totalClosed) * 100) : 0;
     const floatingPnl = totalEquity - totalBalance;
 
-    // Build a 30-day cumulative balance curve by working backwards from
-    // the current combined total balance, subtracting each day's net
-    // profit as we go back in time (since we don't store historical
-    // daily balance snapshots).
     const days = [];
     const today = new Date();
     for (let i = 29; i >= 0; i--) {

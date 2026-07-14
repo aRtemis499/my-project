@@ -2,12 +2,7 @@ const express   = require('express');
 const router    = express.Router();
 const MetaApi   = require('metaapi.cloud-sdk').default;
 const supabase = require('../config/supabase');
-const {
-  addSlaveAccount,
-  enableSlaveAccount,
-  disableSlaveAccount,
-} = require('../utils/duplikium'); // adjust path if needed
-
+const { encrypt } = require('../utils/crypto');
 
 const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
@@ -25,9 +20,9 @@ function requireAuth(req, res, next) {
 router.post('/connect', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { server, account_number, investor_password } = req.body;
+    const { server, account_number, trading_password } = req.body;
 
-    if (!server || !account_number || !investor_password) {
+    if (!server || !account_number || !trading_password) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
 
@@ -51,9 +46,9 @@ router.post('/connect', requireAuth, async (req, res) => {
         user_id:          userId,
         server:           server.trim(),
         account_number:   account_number.trim(),
-        investor_password: investor_password.trim(),
+        trading_password: encrypt(trading_password.trim()),
         status:           'pending',
-        duplikium_account_id: null, // will be set when admin marks connected
+        duplikium_account_id: null, // no longer used — Duplikium removed
         metaapi_account_id:   null, // will be set when admin marks connected
       })
       .select()

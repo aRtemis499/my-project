@@ -1,7 +1,6 @@
 const cron      = require('node-cron');
 const nodemailer = require('nodemailer');
 const supabase = require('../config/supabase');
-const { disableSlaveAccount } = require('../utils/duplikium'); // adjust path
 
 // ── Email transporter ──
 // If you already have nodemailer set up elsewhere, import that instance instead
@@ -127,6 +126,53 @@ function expiredEmail(name) {
   };
 }
 
+// Internal notification to the admin listing accounts that need the EA
+// pulled manually off the MT5 terminal — this is the one step subscription
+// expiry can no longer automate now that copy-trading is manual/EA-based
+// instead of Duplikium-driven.
+function adminEaRemovalEmail(accounts) {
+  const rows = accounts.map(a => `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid rgba(201,168,76,0.12);">${a.name || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid rgba(201,168,76,0.12);">${a.email || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid rgba(201,168,76,0.12);">${a.server}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid rgba(201,168,76,0.12);">${a.account_number}</td>
+    </tr>
+  `).join('');
+
+  return {
+    subject: `[Action needed] ${accounts.length} MT5 account${accounts.length !== 1 ? 's' : ''} need EA removed — subscription expired`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="UTF-8"></head>
+      <body style="font-family: 'Helvetica Neue', Arial, sans-serif; background:#080B10; color:#E8E2D5; margin:0; padding:0;">
+        <div style="max-width:640px;margin:0 auto;padding:32px 24px;">
+          <h2 style="font-weight:300;color:#E8E2D5;">EA removal needed</h2>
+          <p style="font-size:0.9rem;color:#8A8275;line-height:1.6;">
+            The following ${accounts.length} account${accounts.length !== 1 ? 's' : ''} just had ${accounts.length !== 1 ? 'their' : 'its'}
+            subscription expire and ${accounts.length !== 1 ? 'are' : 'is'} now marked <b>disconnected</b> in Supabase.
+            Since copy-trading is manual (EA attached directly to each terminal), this is a reminder to
+            log in and remove the EA from each account below.
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin-top:16px;font-size:0.85rem;">
+            <thead>
+              <tr style="text-align:left;color:#C9A84C;">
+                <th style="padding:8px 12px;">Name</th>
+                <th style="padding:8px 12px;">Email</th>
+                <th style="padding:8px 12px;">Server</th>
+                <th style="padding:8px 12px;">Account #</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+}
+
 // ─────────────────────────────────────────────
 //  Send email helper
 // ─────────────────────────────────────────────
@@ -152,7 +198,6 @@ async function runSubscriptionCheck() {
 
   const now     = new Date();
   const in3Days = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-  const in1Day  = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
 
   try {
 
@@ -161,8 +206,7 @@ async function runSubscriptionCheck() {
       .from('subscriptions')
       .select(`
         id, expires_at, plan, status,
-        users ( id, name, email ),
-        mt5_accounts ( duplikium_account_id )
+        users ( id, name, email )
       `)
       .eq('status', 'active')
       .lte('expires_at', in3Days.toISOString())
@@ -172,10 +216,10 @@ async function runSubscriptionCheck() {
       console.log(`[SubscriptionChecker] ${expiringSoon.length} subscription(s) expiring within 3 days`);
 
       for (const sub of expiringSoon) {
-        const user     = sub.users;
+        const user = sub.users;
         if (!user?.email) continue;
 
-        const expiresAt  = new Date(sub.expires_at);
+        const expiresAt = new Date(sub.expires_at);
         const msLeft     = expiresAt - now;
         const daysLeft   = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
 
@@ -193,7 +237,7 @@ async function runSubscriptionCheck() {
       .select(`
         id, expires_at, plan,
         users ( id, name, email ),
-        mt5_accounts ( id, duplikium_account_id )
+        mt5_accounts ( id, server, account_number )
       `)
       .eq('status', 'active')
       .lt('expires_at', now.toISOString());   // already past expiry
@@ -201,39 +245,52 @@ async function runSubscriptionCheck() {
     if (justExpired?.length) {
       console.log(`[SubscriptionChecker] ${justExpired.length} expired subscription(s) to process`);
 
+      // Accounts needing a manual EA pull, batched into one admin email
+      // instead of a per-account notification.
+      const needsEaRemoval = [];
+
       for (const sub of justExpired) {
-        const user      = sub.users;
-        const mt5Acct   = sub.mt5_accounts;
+        const user    = sub.users;
+        const mt5Acct = sub.mt5_accounts;
 
-        // a. Disable on Duplikium
-        if (mt5Acct?.duplikium_account_id) {
-          try {
-            await disableSlaveAccount(mt5Acct.duplikium_account_id);
-            console.log(`[SubscriptionChecker] Disabled Duplikium slave: ${mt5Acct.duplikium_account_id}`);
-          } catch (dupErr) {
-            console.error(`[SubscriptionChecker] Duplikium disable failed for ${mt5Acct.duplikium_account_id}:`, dupErr.message);
-          }
-        }
-
-        // b. Update MT5 account status in Supabase to 'disconnected'
+        // Update MT5 account status in Supabase to 'disconnected'.
+        // Copy-trading is now manual (EA attached per-account outside the
+        // app) — there is no API call left to make here, only the DB
+        // update and a reminder to the admin to pull the EA by hand.
         if (mt5Acct?.id) {
           await supabase
             .from('mt5_accounts')
             .update({ status: 'disconnected', updated_at: now.toISOString() })
             .eq('id', mt5Acct.id);
+
+          needsEaRemoval.push({
+            name:           user?.name,
+            email:          user?.email,
+            server:         mt5Acct.server,
+            account_number: mt5Acct.account_number,
+          });
         }
 
-        // c. Mark subscription as expired in Supabase
+        // Mark subscription as expired in Supabase
         await supabase
           .from('subscriptions')
           .update({ status: 'expired', updated_at: now.toISOString() })
           .eq('id', sub.id);
 
-        // d. Send expired email
+        // Send expired email to the user
         if (user?.email) {
           const { subject, html } = expiredEmail(user.name);
           await sendEmail(user.email, subject, html);
         }
+      }
+
+      // One batched notification to the admin, only if there's anything
+      // to act on and an admin address is configured.
+      if (needsEaRemoval.length && process.env.ADMIN_NOTIFICATION_EMAIL) {
+        const { subject, html } = adminEaRemovalEmail(needsEaRemoval);
+        await sendEmail(process.env.ADMIN_NOTIFICATION_EMAIL, subject, html);
+      } else if (needsEaRemoval.length) {
+        console.warn('[SubscriptionChecker] ADMIN_NOTIFICATION_EMAIL not set — skipping EA-removal admin alert for', needsEaRemoval.length, 'account(s).');
       }
     }
 
