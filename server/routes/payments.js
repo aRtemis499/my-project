@@ -8,9 +8,9 @@ const router   = express.Router();
 
 // ── Plan config ──
 const PLANS = {
-  premium_monthly:     { amount: 35,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY },
-  premium_semi_annual: { amount: 200, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY},
-  premium_yearly:      { amount: 360, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY },
+  premium_monthly:     { amount: 45,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY },
+  premium_semi_annual: { amount: 260, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY},
+  premium_yearly:      { amount: 500, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY },
 };
 
 
