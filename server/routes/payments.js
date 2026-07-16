@@ -3,76 +3,19 @@ const axios    = require('axios');
 const supabase = require('../config/supabase');
 const router   = express.Router();
 
-
-
-
 // ── Plan config ──
 const PLANS = {
   premium_monthly:     { amount: 45,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY },
-  premium_semi_annual: { amount: 260, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY},
+  premium_semi_annual: { amount: 260, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY },
   premium_yearly:      { amount: 500, days: 365, flwPlanId: process.env.FLW_PREMIUM_YEARLY },
+  trial:               { amount: 9,   days: 7,   flwPlanId: process.env.FLW_TRIAL },
 };
 
-
+// ─────────────────────────────────────────────
+//  POST /payments/subscribe
+// ─────────────────────────────────────────────
 router.post('/subscribe', async (req, res) => {
   const { plan, guest_name, guest_email } = req.body;
-  // ─────────────────────────────────────────────
-//  POST /payments/request-trial
-//  Free 7-day trial — no payment, requires admin approval
-// ─────────────────────────────────────────────
-router.post('/request-trial', async (req, res) => {
-  const { guest_name, guest_email } = req.body;
-
-  let userId, userEmail, userName;
-
-  if (req.isAuthenticated()) {
-    userId    = req.user.id;
-    userEmail = req.user.email;
-    userName  = req.user.name;
-  } else if (guest_email && guest_name) {
-    userId    = null;
-    userEmail = guest_email;
-    userName  = guest_name;
-  } else {
-    return res.status(401).json({ error: 'Please provide your details to continue.' });
-  }
-
-  try {
-    // Prevent duplicate trial requests for the same user/email
-    const { data: existing } = await supabase
-      .from('trial_requests')
-      .select('id, status')
-      .eq(userId ? 'user_id' : 'guest_email', userId || userEmail)
-      .maybeSingle();
-
-    if (existing) {
-      return res.status(400).json({
-        error: 'A trial request already exists for this account. Contact support for changes.'
-      });
-    }
-
-    const { error: insertError } = await supabase
-      .from('trial_requests')
-      .insert([{
-        user_id:     userId,
-        guest_name:  userId ? null : userName,
-        guest_email: userId ? null : userEmail,
-        status:      'pending',
-      }]);
-
-    if (insertError) {
-      console.error('[Trial] Insert error:', insertError);
-      return res.status(500).json({ error: 'Could not submit trial request.' });
-    }
-
-    console.log(`[Trial] Request submitted by ${userEmail}`);
-    res.json({ success: true });
-
-  } catch (err) {
-    console.error('[Trial] Request error:', err.message);
-    res.status(500).json({ error: 'Server error. Please try again.' });
-  }
-});
 
   // ── Resolve user identity ──
   let userEmail, userName, userId;
@@ -151,9 +94,122 @@ router.post('/request-trial', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+//  POST /payments/request-trial
+//  Paid 7-day trial ($9) — charged via Flutterwave, same as a regular
+//  subscription. Activation is automatic on successful payment (handled
+//  in handleSuccessfulCharge below) — no admin approval step anymore.
+//  A row is still written to trial_requests so trial signups remain
+//  tracked/visible on their own, separate from the subscriptions table.
+// ─────────────────────────────────────────────
+router.post('/request-trial', async (req, res) => {
+  const { guest_name, guest_email } = req.body;
+
+  let userId, userEmail, userName;
+
+  if (req.isAuthenticated()) {
+    userId    = req.user.id;
+    userEmail = req.user.email;
+    userName  = req.user.name;
+  } else if (guest_email && guest_name) {
+    userId    = null;
+    userEmail = guest_email;
+    userName  = guest_name;
+  } else {
+    return res.status(401).json({ error: 'Please provide your details to continue.' });
+  }
+
+  const trialPlan = PLANS.trial;
+  if (!trialPlan.flwPlanId) {
+    console.error('[Trial] Missing Flutterwave plan ID for trial');
+    return res.status(500).json({ error: 'Trial plan not configured. Contact support.' });
+  }
+
+  try {
+    // Prevent duplicate trial requests for the same user/email
+    const { data: existing } = await supabase
+      .from('trial_requests')
+      .select('id, status')
+      .eq(userId ? 'user_id' : 'guest_email', userId || userEmail)
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(400).json({
+        error: 'A trial request already exists for this account. Contact support for changes.'
+      });
+    }
+
+    const tx_ref = `bas-trial-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // ── Initialize Flutterwave payment for the $9 trial ──
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/payments',
+      {
+        tx_ref,
+        amount:       trialPlan.amount,
+        currency:     'USD',
+        payment_plan: trialPlan.flwPlanId,
+        redirect_url: `${process.env.FRONTEND_URL}/payment-success.html`,
+        customer: {
+          email: userEmail,
+          name:  userName,
+        },
+        meta: {
+          user_id: userId,
+          plan:    'trial',
+        },
+        customizations: {
+          title:       'Bullion Algo — 7-Day Trial',
+          description: '7-day trial access',
+          logo:        `${process.env.FRONTEND_URL}/assets/logo-colored.svg`,
+        },
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` }
+      }
+    );
+
+    // ── Record the trial request (still pending until webhook confirms payment) ──
+    const { error: insertError } = await supabase
+      .from('trial_requests')
+      .insert([{
+        user_id:     userId,
+        guest_name:  userId ? null : userName,
+        guest_email: userId ? null : userEmail,
+        status:      'pending',
+      }]);
+
+    if (insertError) {
+      console.error('[Trial] Insert error:', insertError);
+      // Payment link was already generated — don't block the user over a
+      // logging failure, but flag it loudly since trial_requests is now
+      // out of sync with what's about to happen on Flutterwave's side.
+      console.error('[Trial] Continuing despite trial_requests insert failure — tx_ref:', tx_ref);
+    }
+
+    // ── Record pending payment, same table /subscribe uses ──
+    await supabase.from('payments').insert([{
+      user_id:     userId,
+      plan:        'trial',
+      amount:      trialPlan.amount,
+      status:      'pending',
+      tx_ref,
+      guest_email: userId ? null : userEmail,
+      guest_name:  userId ? null : userName,
+    }]);
+
+    console.log(`[Trial] Payment initiated for ${userEmail}`);
+    res.json({ success: true, payment_url: response.data.data.link });
+
+  } catch (err) {
+    console.error('[Trial] Request error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Could not initialize trial payment. Please try again.' });
+  }
+});
+
+// ─────────────────────────────────────────────
 //  POST /payments/webhook
 //  Handles Flutterwave webhook events:
-//    - charge.completed  → first payment or renewal
+//    - charge.completed  → first payment or renewal (subscriptions AND trial)
 //    - subscription.*    → subscription lifecycle events
 // ─────────────────────────────────────────────
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -196,7 +252,9 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
 // ─────────────────────────────────────────────
 //  handleSuccessfulCharge
-//  Fires on BOTH first payment and every renewal
+//  Fires on BOTH first payment and every renewal — including the $9
+//  trial, which is just another entry in PLANS as far as this function
+//  is concerned.
 // ─────────────────────────────────────────────
 async function handleSuccessfulCharge(data) {
   const tx_ref = data.tx_ref;
@@ -282,26 +340,28 @@ async function handleSuccessfulCharge(data) {
 
   console.log(`[Webhook] Subscription active for user ${userId} until ${expiresAt}`);
 
-  // ── Re-enable Duplikium slave if it was previously disabled ──
-  const { data: mt5 } = await supabase
-    .from('mt5_accounts')
-    .select('duplikium_account_id, status')
-    .eq('user_id', userId)
-    .single();
+  // ── If this was the paid trial, mark the matching trial_requests row
+  //    as approved so it stops showing as pending — payment IS the
+  //    approval now, no admin click needed. ──
+  if (plan === 'trial') {
+    const matchColumn = userId ? 'user_id' : 'guest_email';
+    const matchValue  = userId || data.customer?.email;
 
-  if (mt5?.duplikium_account_id && mt5.status === 'disconnected') {
-    try {
-      await enableSlaveAccount(mt5.duplikium_account_id);
+    if (matchValue) {
+      const { error: trialUpdateError } = await supabase
+        .from('trial_requests')
+        .update({
+          status:      'approved',
+          approved_at: now.toISOString(),
+        })
+        .eq(matchColumn, matchValue)
+        .eq('status', 'pending');
 
-      // Update mt5_accounts status back to connected
-      await supabase
-        .from('mt5_accounts')
-        .update({ status: 'connected', updated_at: now.toISOString() })
-        .eq('user_id', userId);
-
-      console.log(`[Webhook] Duplikium slave re-enabled for user ${userId}`);
-    } catch (dupErr) {
-      console.error('[Webhook] Duplikium re-enable failed:', dupErr.message);
+      if (trialUpdateError) {
+        console.error('[Webhook] Trial request update error:', trialUpdateError);
+      } else {
+        console.log(`[Webhook] Trial request marked approved for ${matchColumn}: ${matchValue}`);
+      }
     }
   }
 }
