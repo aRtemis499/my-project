@@ -1,22 +1,6 @@
 const crypto = require('crypto');
-
-// AES-256-GCM: authenticated encryption — tampering with the stored value
-// is detectable, not just reversible-if-you-have-the-key.
-//
-// Key comes from Render env, NOT from Supabase — keeping it out of the
-// database entirely means a leaked/dumped DB alone is not enough to
-// recover trading passwords.
-//
-// Generate a key once with:  openssl rand -hex 32
-// Then set it in Render:     TRADING_PASSWORD_ENCRYPTION_KEY=<that value>
-//
-// Rotating this key requires re-encrypting every stored value (decrypt
-// with old key, encrypt with new key) — there's no way around that with
-// symmetric encryption, so treat it as a long-lived secret, not something
-// to rotate casually.
-
 const ALGORITHM  = 'aes-256-gcm';
-const IV_LENGTH  = 12; // 96-bit IV, recommended size for GCM
+const IV_LENGTH  = 12; 
 
 function getKey() {
   const keyHex = process.env.TRADING_PASSWORD_ENCRYPTION_KEY;
@@ -30,9 +14,7 @@ function getKey() {
   return key;
 }
 
-// Returns "iv:authTag:ciphertext" — all hex, colon-separated, stored as a
-// single string in the existing trading_password text column. No schema
-// change needed.
+
 function encrypt(plainText) {
   if (plainText === null || plainText === undefined || plainText === '') return plainText;
 
@@ -70,8 +52,7 @@ function decrypt(payload) {
   return decrypted.toString('utf8');
 }
 
-// Lets callers (like the backfill script) check whether a value is already
-// in encrypted form without needing the key or risking a throw.
+
 function isEncrypted(payload) {
   if (payload === null || payload === undefined) return false;
   return /^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/i.test(String(payload));

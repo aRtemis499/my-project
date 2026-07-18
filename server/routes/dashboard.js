@@ -4,12 +4,12 @@ const protect = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// --- Get everything needed for the user dashboard ---
+
 router.get('/', protect, async (req, res) => {
   const user_id = req.user.id;
 
   try {
-    // Get user's active subscription
+    
     const { data: subscription } = await supabase
       .from('payments')
       .select('*')
@@ -17,14 +17,14 @@ router.get('/', protect, async (req, res) => {
       .eq('status', 'active')
       .single();
 
-    // Get user's MT5 account status
+    
     const { data: mt5 } = await supabase
       .from('mt5_accounts')
       .select('account_number, server, status, created_at')
       .eq('user_id', user_id)
       .single();
 
-    // Send everything back
+    
     res.json({
       user: {
         name: req.user.name,

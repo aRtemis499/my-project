@@ -13,7 +13,7 @@ const paymentRoutes = require('./routes/payments');
 
 const app = express();
 
-// Must be before express.json() middleware for the webhook route
+
 app.use('/payments/webhook', express.raw({ type: 'application/json' }));
 
 

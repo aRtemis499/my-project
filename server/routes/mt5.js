@@ -6,17 +6,13 @@ const { encrypt } = require('../utils/crypto');
 
 const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
-// ── Auth guard ──
+
 function requireAuth(req, res, next) {
   if (req.isAuthenticated && req.isAuthenticated()) return next();
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-// ─────────────────────────────────────────────
-//  POST /mt5/connect
-//  User submits MT5 credentials → save to Supabase
-//  Admin still needs to verify + mark connected
-// ─────────────────────────────────────────────
+
 router.post('/connect', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -26,7 +22,7 @@ router.post('/connect', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
 
-    // Check if user already has a pending/connected account
+    
     const { data: existing } = await supabase
       .from('mt5_accounts')
       .select('id, status')
@@ -39,7 +35,7 @@ router.post('/connect', requireAuth, async (req, res) => {
       });
     }
 
-    // Save to Supabase (status = 'pending' until admin approves)
+    
     const { data: newAccount, error: insertError } = await supabase
       .from('mt5_accounts')
       .insert({
@@ -48,8 +44,8 @@ router.post('/connect', requireAuth, async (req, res) => {
         account_number:   account_number.trim(),
         trading_password: encrypt(trading_password.trim()),
         status:           'pending',
-        duplikium_account_id: null, // no longer used — Duplikium removed
-        metaapi_account_id:   null, // will be set when admin marks connected
+        duplikium_account_id: null, 
+        metaapi_account_id:   null, 
       })
       .select()
       .single();
@@ -72,10 +68,7 @@ router.post('/connect', requireAuth, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /mt5/status
-//  Returns user's MT5 account record
-// ─────────────────────────────────────────────
+
 router.get('/status', requireAuth, async (req, res) => {
   try {
     const { data: account } = await supabase
@@ -92,11 +85,7 @@ router.get('/status', requireAuth, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /mt5/live-data
-//  Returns live balance, equity, positions,
-//  trade history from MetaApi
-// ─────────────────────────────────────────────
+
 router.get('/live-data', requireAuth, async (req, res) => {
   try {
     const { data: account } = await supabase
@@ -109,10 +98,7 @@ router.get('/live-data', requireAuth, async (req, res) => {
       return res.json({ connected: false });
     }
 
-    // MetaApi account must have been provisioned already (done in
-    // PATCH /admin/mt5-accounts/:id when admin marks status 'connected').
-    // Do NOT fall back to the Supabase row id — that is not a valid
-    // MetaApi account id and will always fail lookups.
+    
     if (!account.metaapi_account_id) {
       console.warn(`[MT5 Live Data] No metaapi_account_id for user ${req.user.id} — account not yet provisioned on MetaApi.`);
       return res.json({
@@ -121,7 +107,7 @@ router.get('/live-data', requireAuth, async (req, res) => {
       });
     }
 
-    // Connect via MetaApi
+    
     const metaAccount = await metaApi.metatraderAccountApi.getAccount(
       account.metaapi_account_id
     );
@@ -139,11 +125,7 @@ router.get('/live-data', requireAuth, async (req, res) => {
     );
     const deals = dealsResp?.deals || [];
 
-    // MT5 profit lives on DEALS, not orders — and a single deal only has
-    // one price/time (either the open or the close), not both. To match
-    // the frontend's expected trade shape (openPrice, closePrice, type,
-    // volume, profit, doneTime), pair each closing deal with its opening
-    // deal via positionId and reconstruct one object per closed trade.
+    
     const openingDealsByPosition = {};
     deals.forEach(d => {
       if (d.entryType === 'DEAL_ENTRY_IN' && d.positionId) {

@@ -2,8 +2,7 @@ const cron      = require('node-cron');
 const nodemailer = require('nodemailer');
 const supabase = require('../config/supabase');
 
-// ── Email transporter ──
-// If you already have nodemailer set up elsewhere, import that instance instead
+
 const transporter = nodemailer.createTransport({
   host:   process.env.SMTP_HOST,
   port:   Number(process.env.SMTP_PORT) || 587,
@@ -14,9 +13,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ─────────────────────────────────────────────
-//  Email templates
-// ─────────────────────────────────────────────
 
 function expiryWarningEmail(name, expiresAt, daysLeft) {
   const date = new Date(expiresAt).toLocaleDateString('en-US', {
@@ -126,10 +122,7 @@ function expiredEmail(name) {
   };
 }
 
-// Internal notification to the admin listing accounts that need the EA
-// pulled manually off the MT5 terminal — this is the one step subscription
-// expiry can no longer automate now that copy-trading is manual/EA-based
-// instead of Duplikium-driven.
+
 function adminEaRemovalEmail(accounts) {
   const rows = accounts.map(a => `
     <tr>
@@ -173,9 +166,7 @@ function adminEaRemovalEmail(accounts) {
   };
 }
 
-// ─────────────────────────────────────────────
-//  Send email helper
-// ─────────────────────────────────────────────
+
 async function sendEmail(toEmail, subject, html) {
   try {
     await transporter.sendMail({
@@ -190,9 +181,7 @@ async function sendEmail(toEmail, subject, html) {
   }
 }
 
-// ─────────────────────────────────────────────
-//  Main checker logic
-// ─────────────────────────────────────────────
+
 async function runSubscriptionCheck() {
   console.log('[SubscriptionChecker] Running at', new Date().toISOString());
 
@@ -201,7 +190,7 @@ async function runSubscriptionCheck() {
 
   try {
 
-    // ── 1. Find subscriptions expiring within 3 days (warning emails) ──
+    
     const { data: expiringSoon } = await supabase
       .from('subscriptions')
       .select(`
@@ -231,7 +220,7 @@ async function runSubscriptionCheck() {
       }
     }
 
-    // ── 2. Find subscriptions that just expired ──
+    
     const { data: justExpired } = await supabase
       .from('subscriptions')
       .select(`
@@ -245,18 +234,14 @@ async function runSubscriptionCheck() {
     if (justExpired?.length) {
       console.log(`[SubscriptionChecker] ${justExpired.length} expired subscription(s) to process`);
 
-      // Accounts needing a manual EA pull, batched into one admin email
-      // instead of a per-account notification.
+      
       const needsEaRemoval = [];
 
       for (const sub of justExpired) {
         const user    = sub.users;
         const mt5Acct = sub.mt5_accounts;
 
-        // Update MT5 account status in Supabase to 'disconnected'.
-        // Copy-trading is now manual (EA attached per-account outside the
-        // app) — there is no API call left to make here, only the DB
-        // update and a reminder to the admin to pull the EA by hand.
+        
         if (mt5Acct?.id) {
           await supabase
             .from('mt5_accounts')
@@ -271,21 +256,20 @@ async function runSubscriptionCheck() {
           });
         }
 
-        // Mark subscription as expired in Supabase
+        
         await supabase
           .from('subscriptions')
           .update({ status: 'expired', updated_at: now.toISOString() })
           .eq('id', sub.id);
 
-        // Send expired email to the user
+        
         if (user?.email) {
           const { subject, html } = expiredEmail(user.name);
           await sendEmail(user.email, subject, html);
         }
       }
 
-      // One batched notification to the admin, only if there's anything
-      // to act on and an admin address is configured.
+      
       if (needsEaRemoval.length && process.env.ADMIN_NOTIFICATION_EMAIL) {
         const { subject, html } = adminEaRemovalEmail(needsEaRemoval);
         await sendEmail(process.env.ADMIN_NOTIFICATION_EMAIL, subject, html);
@@ -301,16 +285,12 @@ async function runSubscriptionCheck() {
   }
 }
 
-// ─────────────────────────────────────────────
-//  Schedule: runs every day at 09:00 UTC
-//  Cron format: minute hour day month weekday
-// ─────────────────────────────────────────────
+
 cron.schedule('0 9 * * *', runSubscriptionCheck, {
   timezone: 'UTC',
 });
 
-// Run once immediately on startup so you can verify it works
-// Comment this out in production if you don't want it firing on every restart
+
 if (process.env.NODE_ENV !== 'production') {
   console.log('[SubscriptionChecker] Running initial check (dev mode)...');
   runSubscriptionCheck();
@@ -318,4 +298,4 @@ if (process.env.NODE_ENV !== 'production') {
 
 console.log('[SubscriptionChecker] Scheduled — runs daily at 09:00 UTC');
 
-module.exports = { runSubscriptionCheck }; // exported for manual triggering if needed
+module.exports = { runSubscriptionCheck }; 

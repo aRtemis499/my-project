@@ -6,7 +6,7 @@ const { decrypt } = require('../utils/crypto');
 
 const metaApi = new MetaApi(process.env.METAAPI_TOKEN);
 
-// ── Admin guard ──
+
 function requireAdmin(req, res, next) {
   if (req.isAuthenticated && req.isAuthenticated() && req.user?.role === 'admin') {
     return next();
@@ -14,13 +14,7 @@ function requireAdmin(req, res, next) {
   return res.status(403).json({ error: 'Forbidden' });
 }
 
-// ─────────────────────────────────────────────
-//  PATCH /admin/mt5-accounts/:id
-//  Update account status. Duplikium removed — EA is attached manually
-//  by the admin outside the app once an account shows 'connected'.
-//  MetaApi provisioning still happens here since the dashboard's live
-//  balance/equity/trade-history view depends on it.
-// ─────────────────────────────────────────────
+
 router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
   try {
     const { id }     = req.params;
@@ -96,14 +90,7 @@ router.patch('/mt5-accounts/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/mt5-accounts
-//  All submitted MT5 accounts.
-//  IMPORTANT: trading_password is explicitly excluded from this
-//  response — the admin dashboard has no reason to display it in the
-//  browser, and sending it over the wire (encrypted or not) is an
-//  unnecessary exposure now that this is a real trading password.
-// ─────────────────────────────────────────────
+
 router.get('/mt5-accounts', requireAdmin, async (req, res) => {
   try {
     const { data: accounts, error } = await supabase
@@ -120,15 +107,7 @@ router.get('/mt5-accounts', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/mt5-accounts/:id/credentials
-//  Separate, explicit endpoint for the admin to retrieve the trading
-//  password when they actually need it to attach the EA manually.
-//  Kept isolated from the main list endpoint so the password is only
-//  ever fetched on a deliberate action, not loaded automatically with
-//  every dashboard refresh. Decrypted here, at the point of actual use —
-//  it is never stored or transmitted in plaintext anywhere else.
-// ─────────────────────────────────────────────
+
 router.get('/mt5-accounts/:id/credentials', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -166,10 +145,7 @@ router.get('/mt5-accounts/:id/credentials', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/trial-requests
-//  All pending trial requests
-// ─────────────────────────────────────────────
+
 router.get('/trial-requests', requireAdmin, async (req, res) => {
   try {
     const { data: requests, error } = await supabase
@@ -186,10 +162,7 @@ router.get('/trial-requests', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  PATCH /admin/trial-requests/:id
-//  Approve or reject a trial request
-// ─────────────────────────────────────────────
+
 router.patch('/trial-requests/:id', requireAdmin, async (req, res) => {
   try {
     const { id }     = req.params;
@@ -264,10 +237,7 @@ router.patch('/trial-requests/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/stats
-//  Total users + active subscriptions
-// ─────────────────────────────────────────────
+
 router.get('/stats', requireAdmin, async (req, res) => {
   try {
     const { count: totalUsers } = await supabase
@@ -287,10 +257,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/live-summary
-//  Aggregated MT5 stats across all connected users — computed live from MetaApi
-// ─────────────────────────────────────────────
+
 router.get('/live-summary', requireAdmin, async (req, res) => {
   try {
     const { data: accounts, error } = await supabase
@@ -385,10 +352,7 @@ router.get('/live-summary', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  GET /admin/admins
-//  List all admin users (for invite panel)
-// ─────────────────────────────────────────────
+
 router.get('/admins', requireAdmin, async (req, res) => {
   try {
     const { data: admins } = await supabase
@@ -404,10 +368,7 @@ router.get('/admins', requireAdmin, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /admin/invite
-//  Promote a user to admin by email
-// ─────────────────────────────────────────────
+
 router.post('/invite', requireAdmin, async (req, res) => {
   try {
     const { email } = req.body;

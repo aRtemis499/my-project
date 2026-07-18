@@ -9,7 +9,7 @@ require('dotenv').config();
 
 const router = express.Router();
 
-// ── Mailer (reuses your existing Brevo SMTP env vars) ──
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
@@ -32,7 +32,7 @@ async (accessToken, refreshToken, profile, done) => {
     const google_id = profile.id;
     const avatar = profile.photos[0]?.value || null;
 
-    // Check if user exists by google_id first
+    
     let { data: existingUser, error: fetchError } = await supabase
       .from('users')
       .select('*')
@@ -53,9 +53,7 @@ async (accessToken, refreshToken, profile, done) => {
       return done(null, { ...existingUser, avatar });
     }
 
-    // No google_id match — check if an email/password account already
-    // exists with this email, and link the Google login to it instead
-    // of creating a duplicate account.
+    
     let { data: emailUser, error: emailFetchError } = await supabase
       .from('users')
       .select('*')
@@ -83,7 +81,7 @@ async (accessToken, refreshToken, profile, done) => {
       return done(null, linkedUser);
     }
 
-    // Brand new user — insert
+    
     let { data: newUser, error: insertError } = await supabase
       .from('users')
       .insert([{ email, name, google_id, role: 'user', avatar }])
@@ -152,10 +150,7 @@ router.get('/me', (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /auth/signup
-//  Email + password + name + phone
-// ─────────────────────────────────────────────
+
 router.post('/signup', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
@@ -177,8 +172,7 @@ router.post('/signup', async (req, res) => {
       if (existing.password_hash) {
         return res.status(400).json({ error: 'An account with this email already exists. Please log in.' });
       }
-      // Existing Google-only account with this email — don't silently
-      // overwrite; ask them to log in with Google instead.
+      
       if (existing.google_id) {
         return res.status(400).json({
           error: 'This email is already linked to a Google account. Please continue with Google.',
@@ -215,10 +209,7 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /auth/login
-//  Email + password
-// ─────────────────────────────────────────────
+
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -234,12 +225,12 @@ router.post('/login', async (req, res) => {
       .single();
 
     if (error || !user) {
-      // No account at all for this email — frontend should redirect to signup
+      
       return res.status(404).json({ error: 'no_account', message: 'No account found with this email.' });
     }
 
     if (!user.password_hash) {
-      // Account exists but was created via Google only
+      
       return res.status(400).json({
         error: 'google_only',
         message: 'This account uses Google sign-in. Please continue with Google.',
@@ -267,10 +258,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /auth/forgot-password
-//  Sends reset link if the email exists (never reveals if it doesn't)
-// ─────────────────────────────────────────────
+
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -282,8 +270,7 @@ router.post('/forgot-password', async (req, res) => {
       .eq('email', email)
       .single();
 
-    // Always respond the same way whether or not the account exists,
-    // to avoid leaking which emails are registered.
+    
     const genericResponse = {
       success: true,
       message: 'If an account with that email exists, a reset link has been sent.',
@@ -326,10 +313,7 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /auth/reset-password
-//  Takes the raw token from the emailed link + new password
-// ─────────────────────────────────────────────
+
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, password } = req.body;

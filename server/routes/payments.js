@@ -3,7 +3,7 @@ const axios    = require('axios');
 const supabase = require('../config/supabase');
 const router   = express.Router();
 
-// ── Plan config ──
+
 const PLANS = {
   premium_monthly:     { amount: 45,  days: 30,  flwPlanId: process.env.FLW_PREMIUM_MONTHLY },
   premium_semi_annual: { amount: 260, days: 180, flwPlanId: process.env.FLW_PREMIUM_SEMI_ANNUALLY },
@@ -11,13 +11,11 @@ const PLANS = {
   trial:               { amount: 9,   days: 7,   flwPlanId: process.env.FLW_TRIAL },
 };
 
-// ─────────────────────────────────────────────
-//  POST /payments/subscribe
-// ─────────────────────────────────────────────
+
 router.post('/subscribe', async (req, res) => {
   const { plan, guest_name, guest_email } = req.body;
 
-  // ── Resolve user identity ──
+  
   let userEmail, userName, userId;
 
   if (req.isAuthenticated()) {
@@ -32,7 +30,7 @@ router.post('/subscribe', async (req, res) => {
     return res.status(401).json({ error: 'Please provide your details to continue.' });
   }
 
-  // ── Validate plan ──
+  
   const selectedPlan = PLANS[plan];
   if (!selectedPlan) {
     return res.status(400).json({ error: 'Invalid plan selected.' });
@@ -46,21 +44,21 @@ router.post('/subscribe', async (req, res) => {
   try {
     const tx_ref = `bas-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-    // ── Initialize Flutterwave payment with payment_plan attached ──
+    
     const response = await axios.post(
       'https://api.flutterwave.com/v3/payments',
       {
         tx_ref,
         amount:       selectedPlan.amount,
         currency:     'USD',
-        payment_plan: selectedPlan.flwPlanId,   // ← this makes it recurring
+        payment_plan: selectedPlan.flwPlanId,  
         redirect_url: `${process.env.FRONTEND_URL}/payment-success.html`,
         customer: {
           email: userEmail,
           name:  userName,
         },
         meta: {
-          user_id: userId,   // passed back in webhook payload
+          user_id: userId,   
           plan,
         },
         customizations: {
@@ -74,7 +72,7 @@ router.post('/subscribe', async (req, res) => {
       }
     );
 
-    // ── Record pending payment in Supabase ──
+    
     await supabase.from('payments').insert([{
       user_id:     userId,
       plan,
@@ -93,14 +91,7 @@ router.post('/subscribe', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /payments/request-trial
-//  Paid 7-day trial ($9) — charged via Flutterwave, same as a regular
-//  subscription. Activation is automatic on successful payment (handled
-//  in handleSuccessfulCharge below) — no admin approval step anymore.
-//  A row is still written to trial_requests so trial signups remain
-//  tracked/visible on their own, separate from the subscriptions table.
-// ─────────────────────────────────────────────
+
 router.post('/request-trial', async (req, res) => {
   const { guest_name, guest_email } = req.body;
 
@@ -125,7 +116,7 @@ router.post('/request-trial', async (req, res) => {
   }
 
   try {
-    // Prevent duplicate trial requests for the same user/email
+    
     const { data: existing } = await supabase
       .from('trial_requests')
       .select('id, status')
@@ -140,7 +131,7 @@ router.post('/request-trial', async (req, res) => {
 
     const tx_ref = `bas-trial-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-    // ── Initialize Flutterwave payment for the $9 trial ──
+    
     const response = await axios.post(
       'https://api.flutterwave.com/v3/payments',
       {
@@ -168,7 +159,7 @@ router.post('/request-trial', async (req, res) => {
       }
     );
 
-    // ── Record the trial request (still pending until webhook confirms payment) ──
+    
     const { error: insertError } = await supabase
       .from('trial_requests')
       .insert([{
@@ -180,13 +171,10 @@ router.post('/request-trial', async (req, res) => {
 
     if (insertError) {
       console.error('[Trial] Insert error:', insertError);
-      // Payment link was already generated — don't block the user over a
-      // logging failure, but flag it loudly since trial_requests is now
-      // out of sync with what's about to happen on Flutterwave's side.
       console.error('[Trial] Continuing despite trial_requests insert failure — tx_ref:', tx_ref);
     }
 
-    // ── Record pending payment, same table /subscribe uses ──
+    
     await supabase.from('payments').insert([{
       user_id:     userId,
       plan:        'trial',
@@ -206,15 +194,10 @@ router.post('/request-trial', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────
-//  POST /payments/webhook
-//  Handles Flutterwave webhook events:
-//    - charge.completed  → first payment or renewal (subscriptions AND trial)
-//    - subscription.*    → subscription lifecycle events
-// ─────────────────────────────────────────────
+
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
 
-  // ── Verify webhook hash ──
+  
   const signature = req.headers['verif-hash'];
   if (!signature || signature !== process.env.FLW_WEBHOOK_HASH) {
     console.warn('[Webhook] Invalid signature — request rejected');
@@ -231,10 +214,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
   console.log(`[Webhook] Event received: ${event.event}`, JSON.stringify(event.data?.id));
 
-  // ── Respond to Flutterwave immediately (must be fast) ──
+  
   res.status(200).json({ received: true });
 
-  // ── Process event asynchronously ──
+  
   try {
     if (event.event === 'charge.completed' && event.data?.status === 'successful') {
       await handleSuccessfulCharge(event.data);
@@ -250,21 +233,16 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   }
 });
 
-// ─────────────────────────────────────────────
-//  handleSuccessfulCharge
-//  Fires on BOTH first payment and every renewal — including the $9
-//  trial, which is just another entry in PLANS as far as this function
-//  is concerned.
-// ─────────────────────────────────────────────
+
 async function handleSuccessfulCharge(data) {
   const tx_ref = data.tx_ref;
   const meta   = data.meta || {};
 
-  // Extract user_id and plan from meta (set during initialization)
+  
   let userId = meta.user_id || null;
   let plan   = meta.plan   || null;
 
-  // ── Verify the transaction with Flutterwave (security best practice) ──
+  
   try {
     const verify = await axios.get(
       `https://api.flutterwave.com/v3/transactions/${data.id}/verify`,
@@ -279,7 +257,7 @@ async function handleSuccessfulCharge(data) {
     return;
   }
 
-  // ── If user_id not in meta, look up by email (guest or renewal) ──
+  
   if (!userId && data.customer?.email) {
     const { data: user } = await supabase
       .from('users')
@@ -289,7 +267,7 @@ async function handleSuccessfulCharge(data) {
     userId = user?.id || null;
   }
 
-  // ── If plan not in meta, look up from tx_ref in payments table ──
+  
   if (!plan && tx_ref) {
     const { data: payment } = await supabase
       .from('payments')
@@ -313,7 +291,7 @@ async function handleSuccessfulCharge(data) {
   const now        = new Date();
   const expiresAt  = new Date(now.getTime() + planConfig.days * 24 * 60 * 60 * 1000).toISOString();
 
-  // ── Upsert subscription in Supabase ──
+  
   const { error: subError } = await supabase
     .from('subscriptions')
     .upsert({
@@ -324,7 +302,7 @@ async function handleSuccessfulCharge(data) {
       flw_subscription_id: data.plan?.id?.toString() || null,
       updated_at:          now.toISOString(),
     }, {
-      onConflict: 'user_id',  // update existing subscription if user already has one
+      onConflict: 'user_id',  
     });
 
   if (subError) {
@@ -332,7 +310,7 @@ async function handleSuccessfulCharge(data) {
     return;
   }
 
-  // ── Update payments table ──
+  
   await supabase
     .from('payments')
     .update({ status: 'successful', updated_at: now.toISOString() })
@@ -340,9 +318,7 @@ async function handleSuccessfulCharge(data) {
 
   console.log(`[Webhook] Subscription active for user ${userId} until ${expiresAt}`);
 
-  // ── If this was the paid trial, mark the matching trial_requests row
-  //    as approved so it stops showing as pending — payment IS the
-  //    approval now, no admin click needed. ──
+  
   if (plan === 'trial') {
     const matchColumn = userId ? 'user_id' : 'guest_email';
     const matchValue  = userId || data.customer?.email;
@@ -366,15 +342,12 @@ async function handleSuccessfulCharge(data) {
   }
 }
 
-// ─────────────────────────────────────────────
-//  handleSubscriptionCancelled
-//  User cancelled recurring charge on Flutterwave side
-// ─────────────────────────────────────────────
+
 async function handleSubscriptionCancelled(data) {
   const flwSubscriptionId = data.id?.toString();
   if (!flwSubscriptionId) return;
 
-  // Find the subscription in Supabase
+  
   const { data: sub } = await supabase
     .from('subscriptions')
     .select('user_id')
@@ -386,7 +359,7 @@ async function handleSubscriptionCancelled(data) {
     return;
   }
 
-  // Mark as cancelled — subscriptionChecker will handle disabling on expiry date
+  
   await supabase
     .from('subscriptions')
     .update({

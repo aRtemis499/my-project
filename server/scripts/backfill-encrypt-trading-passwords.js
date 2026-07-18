@@ -1,14 +1,3 @@
-// One-time backfill: encrypts any mt5_accounts.trading_password values that
-// are still plaintext (submitted before encryption was wired in). Safe to
-// re-run — already-encrypted rows are detected and skipped.
-//
-// Run manually, once, after deploying the encryption changes:
-//   node scripts/backfill-encrypt-trading-passwords.js
-//
-// Requires TRADING_PASSWORD_ENCRYPTION_KEY and your Supabase env vars to be
-// set in the environment you run this from (e.g. `render env` locally, or
-// run it as a one-off Render Job/Shell so it has the same env as the app).
-
 require('dotenv').config();
 const supabase = require('../config/supabase');
 const { encrypt, isEncrypted } = require('../utils/crypto');
