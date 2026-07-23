@@ -1,17 +1,25 @@
-const cron      = require('node-cron');
-const nodemailer = require('nodemailer');
+const cron  = require('node-cron');
+const axios = require('axios');
 const supabase = require('../config/supabase');
 
 
-const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST,
-  port:   Number(process.env.SMTP_PORT) || 587,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+async function brevoSend({ to, subject, html, from = process.env.MAIL_FROM_SUPPORT }) {
+  return axios.post(
+    'https://api.brevo.com/v3/smtp/email',
+    {
+      sender:  { email: from, name: 'Bullion Algo System' },
+      to:      [{ email: to }],
+      subject,
+      htmlContent: html,
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+      },
+    }
+  );
+}
 
 
 function expiryWarningEmail(name, expiresAt, daysLeft) {
@@ -169,15 +177,10 @@ function adminEaRemovalEmail(accounts) {
 
 async function sendEmail(toEmail, subject, html) {
   try {
-    await transporter.sendMail({
-      from:    `"Bullion Algo" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-      to:      toEmail,
-      subject,
-      html,
-    });
+    await brevoSend({ to: toEmail, subject, html });
     console.log(`[SubscriptionChecker] Email sent to ${toEmail}: "${subject}"`);
   } catch (err) {
-    console.error(`[SubscriptionChecker] Failed to send email to ${toEmail}:`, err.message);
+    console.error(`[SubscriptionChecker] Failed to send email to ${toEmail}:`, err.response?.data || err.message);
   }
 }
 
@@ -190,7 +193,7 @@ async function runSubscriptionCheck() {
 
   try {
 
-    
+
     const { data: expiringSoon } = await supabase
       .from('subscriptions')
       .select(`
@@ -220,7 +223,7 @@ async function runSubscriptionCheck() {
       }
     }
 
-    
+
     const { data: justExpired } = await supabase
       .from('subscriptions')
       .select(`
@@ -234,14 +237,14 @@ async function runSubscriptionCheck() {
     if (justExpired?.length) {
       console.log(`[SubscriptionChecker] ${justExpired.length} expired subscription(s) to process`);
 
-      
+
       const needsEaRemoval = [];
 
       for (const sub of justExpired) {
         const user    = sub.users;
         const mt5Acct = sub.mt5_accounts;
 
-        
+
         if (mt5Acct?.id) {
           await supabase
             .from('mt5_accounts')
@@ -256,20 +259,20 @@ async function runSubscriptionCheck() {
           });
         }
 
-        
+
         await supabase
           .from('subscriptions')
           .update({ status: 'expired', updated_at: now.toISOString() })
           .eq('id', sub.id);
 
-        
+
         if (user?.email) {
           const { subject, html } = expiredEmail(user.name);
           await sendEmail(user.email, subject, html);
         }
       }
 
-      
+
       if (needsEaRemoval.length && process.env.ADMIN_NOTIFICATION_EMAIL) {
         const { subject, html } = adminEaRemovalEmail(needsEaRemoval);
         await sendEmail(process.env.ADMIN_NOTIFICATION_EMAIL, subject, html);
@@ -298,4 +301,4 @@ if (process.env.NODE_ENV !== 'production') {
 
 console.log('[SubscriptionChecker] Scheduled — runs daily at 09:00 UTC');
 
-module.exports = { runSubscriptionCheck }; 
+module.exports = { runSubscriptionCheck };

@@ -3,22 +3,29 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 const supabase = require('../config/supabase');
 require('dotenv').config();
 
 const router = express.Router();
 
-
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+async function sendEmail({ to, subject, html, from = process.env.MAIL_FROM_AUTH }) {
+  return axios.post(
+    'https://api.brevo.com/v3/smtp/email',
+    {
+      sender:  { email: from, name: 'Bullion Algo System' },
+      to:      [{ email: to }],
+      subject,
+      htmlContent: html,
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+      },
+    }
+  );
+}
 
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
@@ -32,7 +39,6 @@ async (accessToken, refreshToken, profile, done) => {
     const google_id = profile.id;
     const avatar = profile.photos[0]?.value || null;
 
-    
     let { data: existingUser, error: fetchError } = await supabase
       .from('users')
       .select('*')
@@ -53,7 +59,6 @@ async (accessToken, refreshToken, profile, done) => {
       return done(null, { ...existingUser, avatar });
     }
 
-    
     let { data: emailUser, error: emailFetchError } = await supabase
       .from('users')
       .select('*')
@@ -81,7 +86,6 @@ async (accessToken, refreshToken, profile, done) => {
       return done(null, linkedUser);
     }
 
-    
     let { data: newUser, error: insertError } = await supabase
       .from('users')
       .insert([{ email, name, google_id, role: 'user', avatar }])
@@ -172,7 +176,6 @@ router.post('/signup', async (req, res) => {
       if (existing.password_hash) {
         return res.status(400).json({ error: 'An account with this email already exists. Please log in.' });
       }
-      
       if (existing.google_id) {
         return res.status(400).json({
           error: 'This email is already linked to a Google account. Please continue with Google.',
@@ -225,12 +228,10 @@ router.post('/login', async (req, res) => {
       .single();
 
     if (error || !user) {
-      
       return res.status(404).json({ error: 'no_account', message: 'No account found with this email.' });
     }
 
     if (!user.password_hash) {
-      
       return res.status(400).json({
         error: 'google_only',
         message: 'This account uses Google sign-in. Please continue with Google.',
@@ -270,7 +271,6 @@ router.post('/forgot-password', async (req, res) => {
       .eq('email', email)
       .single();
 
-    
     const genericResponse = {
       success: true,
       message: 'If an account with that email exists, a reset link has been sent.',
@@ -282,7 +282,7 @@ router.post('/forgot-password', async (req, res) => {
 
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const expires      = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+    const expires     = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
     await supabase
       .from('users')
@@ -291,19 +291,22 @@ router.post('/forgot-password', async (req, res) => {
 
     const resetUrl = `https://bullionalgosystem.com/reset-password.html?token=${rawToken}`;
 
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM,
-      to: email,
-      subject: 'Reset your Bullion Algo System password',
-      html: `
-        <div style="font-family: 'Outfit', sans-serif; background:#080B10; color:#E8E2D5; padding:32px;">
-          <h2 style="color:#C9A84C; font-weight:400;">Reset your password</h2>
-          <p>Hi ${user.name || 'there'}, click the link below to reset your Bullion Algo System password. This link expires in 1 hour.</p>
-          <p><a href="${resetUrl}" style="color:#C9A84C;">${resetUrl}</a></p>
-          <p style="color:#8A8275; font-size:0.85rem;">If you didn't request this, you can safely ignore this email.</p>
-        </div>
-      `,
-    });
+    try {
+      await sendEmail({
+        to: email,
+        subject: 'Reset your Bullion Algo System password',
+        html: `
+          <div style="font-family: 'Outfit', sans-serif; background:#080B10; color:#E8E2D5; padding:32px;">
+            <h2 style="color:#C9A84C; font-weight:400;">Reset your password</h2>
+            <p>Hi ${user.name || 'there'}, click the link below to reset your Bullion Algo System password. This link expires in 1 hour.</p>
+            <p><a href="${resetUrl}" style="color:#C9A84C;">${resetUrl}</a></p>
+            <p style="color:#8A8275; font-size:0.85rem;">If you didn't request this, you can safely ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch (mailErr) {
+      console.error('[Forgot Password] Brevo send error:', mailErr.response?.data || mailErr.message);
+    }
 
     res.json(genericResponse);
 
