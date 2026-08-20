@@ -27,6 +27,24 @@ async function sendEmail({ to, subject, html, from = process.env.MAIL_FROM_AUTH 
   );
 }
 
+async function sendWelcomeEmail(user) {
+  if (!user?.email) return;
+
+  await sendEmail({
+    to: user.email,
+    subject: 'Welcome to Bullion Algo System',
+    html: `
+      <div style="font-family: 'Outfit', sans-serif; background:#080B10; color:#E8E2D5; padding:32px;">
+        <h2 style="color:#C9A84C; font-weight:400;">Welcome, ${user.name || 'there'}.</h2>
+        <p>Your Bullion Algo System account has been created.</p>
+        <p>Next step — connect your MT5 account from your dashboard so we can attach the trading algorithm and start powering your live balance, equity, and trade history view.</p>
+        <p><a href="https://bullionalgosystem.com/userdashboard.html" style="color:#C9A84C;">Go to your dashboard →</a></p>
+        <p style="color:#8A8275; font-size:0.85rem;">If you didn't create this account, you can safely ignore this email.</p>
+      </div>
+    `,
+  });
+}
+
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -96,6 +114,10 @@ async (accessToken, refreshToken, profile, done) => {
       console.error('Insert error:', JSON.stringify(insertError));
       return done(insertError, null);
     }
+
+    sendWelcomeEmail(newUser).catch(mailErr =>
+      console.error('[Google Signup] Welcome email failed:', mailErr.response?.data || mailErr.message)
+    );
 
     return done(null, newUser);
 
@@ -196,6 +218,10 @@ router.post('/signup', async (req, res) => {
       return res.status(500).json({ error: 'Could not create account. Please try again.' });
     }
 
+    sendWelcomeEmail(newUser).catch(mailErr =>
+      console.error('[Signup] Welcome email failed:', mailErr.response?.data || mailErr.message)
+    );
+
     req.login(newUser, (err) => {
       if (err) {
         console.error('[Signup] Login after signup error:', err);
@@ -282,7 +308,7 @@ router.post('/forgot-password', async (req, res) => {
 
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const expires     = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+    const expires     = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
     await supabase
       .from('users')
