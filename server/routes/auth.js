@@ -269,6 +269,47 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'invalid_password', message: 'Incorrect password.' });
     }
 
+    if (user.role === 'admin') {
+      const rawOtp    = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = crypto.createHash('sha256').update(rawOtp).digest('hex');
+      const expires   = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+      const { error: otpError } = await supabase
+        .from('users')
+        .update({ otp_hash: hashedOtp, otp_expires: expires })
+        .eq('id', user.id);
+
+      if (otpError) {
+        console.error('[Login] Failed to store admin OTP:', otpError);
+        return res.status(500).json({ error: 'Login failed. Please try again.' });
+      }
+
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: 'Your Bullion Algo System admin verification code',
+          html: `
+            <div style="font-family: 'Outfit', sans-serif; background:#080B10; color:#E8E2D5; padding:32px;">
+              <h2 style="color:#C9A84C; font-weight:400;">Admin verification code</h2>
+              <p>Hi ${user.name || 'there'}, use the code below to finish signing in. This code expires in 10 minutes.</p>
+              <p style="font-size:2rem; letter-spacing:0.3em; color:#C9A84C; font-weight:600;">${rawOtp}</p>
+              <p style="color:#8A8275; font-size:0.85rem;">If you didn't try to log in, you can safely ignore this email — your account is still protected by your password.</p>
+            </div>
+          `,
+        });
+      } catch (mailErr) {
+        console.error('[Login] Admin OTP email send failed:', mailErr.response?.data || mailErr.message);
+        return res.status(500).json({ error: 'Could not send verification code. Please try again.' });
+      }
+
+      return res.json({
+        success: false,
+        requiresOtp: true,
+        email: user.email,
+        message: 'Enter the verification code sent to your email.',
+      });
+    }
+
     req.login(user, (err) => {
       if (err) {
         console.error('[Login] req.login error:', err);
@@ -281,6 +322,57 @@ router.post('/login', async (req, res) => {
 
   } catch (err) {
     console.error('[Login] Error:', err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+});
+
+
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({ error: 'Email and code are required.' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    if (!user.otp_hash || !user.otp_expires) {
+      return res.status(400).json({ error: 'No verification code pending. Please log in again.' });
+    }
+
+    if (new Date(user.otp_expires) < new Date()) {
+      await supabase.from('users').update({ otp_hash: null, otp_expires: null }).eq('id', user.id);
+      return res.status(400).json({ error: 'This code has expired. Please log in again.' });
+    }
+
+    const hashedInput = crypto.createHash('sha256').update(code.trim()).digest('hex');
+    if (hashedInput !== user.otp_hash) {
+      return res.status(401).json({ error: 'Incorrect code.' });
+    }
+
+    await supabase.from('users').update({ otp_hash: null, otp_expires: null }).eq('id', user.id);
+
+    req.login(user, (err) => {
+      if (err) {
+        console.error('[Verify OTP] req.login error:', err);
+        return res.status(500).json({ error: 'Login failed. Please try again.' });
+      }
+      req.session.save(() => {
+        res.json({ success: true, user });
+      });
+    });
+
+  } catch (err) {
+    console.error('[Verify OTP] Error:', err);
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
 });
