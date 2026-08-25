@@ -9,6 +9,8 @@ require('dotenv').config();
 
 const router = express.Router();
 
+const DUMMY_HASH = bcrypt.hashSync('timing-attack-mitigation', 10);
+
 async function sendEmail({ to, subject, html, from = process.env.MAIL_FROM_AUTH }) {
   return axios.post(
     'https://api.brevo.com/v3/smtp/email',
@@ -247,26 +249,27 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
+    const invalidCredentials = { error: 'invalid_credentials', message: 'Invalid email or password.' };
+
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
       .single();
 
-    if (error || !user) {
-      return res.status(404).json({ error: 'no_account', message: 'No account found with this email.' });
-    }
-
-    if (!user.password_hash) {
-      return res.status(400).json({
-        error: 'google_only',
-        message: 'This account uses Google sign-in. Please continue with Google.',
-      });
+    if (error || !user || !user.password_hash) {
+      // No matching account, or account is Google-only (no password to check).
+      // We still run a bcrypt comparison against a dummy hash here so this path
+      // takes roughly the same time as a real password check below — otherwise
+      // an attacker could tell these cases apart just by response speed, even
+      // though the response body itself is now identical either way.
+      await bcrypt.compare(password, DUMMY_HASH);
+      return res.status(401).json(invalidCredentials);
     }
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
-      return res.status(401).json({ error: 'invalid_password', message: 'Incorrect password.' });
+      return res.status(401).json(invalidCredentials);
     }
 
     if (user.role === 'admin') {
